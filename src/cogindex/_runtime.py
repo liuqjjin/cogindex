@@ -1,0 +1,94 @@
+"""Runtime abstraction over a Cognee deployment (ADR-0007)."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
+from typing import Any, Protocol, runtime_checkable
+
+from ._spec import CognifyProfile
+
+__all__ = ["CogneeRuntime", "DatasetHandle", "DocumentPayload"]
+
+
+@dataclass(frozen=True)
+class DatasetHandle:
+    """Reference to a (possibly not-yet-materialized) Cognee dataset.
+
+    ``dataset_id`` is None until the dataset exists: Cognee creates datasets
+    implicitly on first ``add()`` — there is no public create API.
+    """
+
+    name: str
+    tenant: str
+    dataset_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class DocumentPayload:
+    """Everything needed to ingest one document into Cognee."""
+
+    data_id: uuid.UUID
+    content: str | bytes
+    label: str | None = None
+    external_metadata: dict[str, Any] | None = None
+    node_set: tuple[str, ...] | None = None
+    importance_weight: float | None = None
+
+
+@runtime_checkable
+class CogneeRuntime(Protocol):
+    """What cogindex needs from a Cognee deployment.
+
+    Implementations: :class:`cogindex.LocalCogneeRuntime` (in-process
+    library) and :class:`cogindex.testing.FakeCogneeRuntime` (tests).
+
+    Every method is idempotent as observed by the caller (ADR-0003/0004):
+    deleting or purging missing data succeeds, re-adding the same payload
+    converges, cognify skips already-processed items. The write protocol's
+    convergence proof depends on these properties, not on locking.
+    """
+
+    async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
+        """Look up the dataset; ``dataset_id`` is None if it does not exist."""
+        ...
+
+    async def add_documents(
+        self, handle: DatasetHandle, payloads: Sequence[DocumentPayload]
+    ) -> DatasetHandle:
+        """Ingest documents under their stable data_ids.
+
+        Returns a handle with ``dataset_id`` set (the dataset materializes on
+        first add if it did not exist).
+        """
+        ...
+
+    async def purge_document_memory(
+        self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]
+    ) -> None:
+        """Remove graph/vector derivatives and reset cognify status, keeping
+        raw data. Missing documents or datasets are success (no-op)."""
+        ...
+
+    async def delete_documents(self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]) -> None:
+        """Hard-delete documents (raw data + derivatives). Missing documents
+        or datasets are success (no-op)."""
+        ...
+
+    async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
+        """Run incremental cognify over the dataset: items whose pipeline
+        status is already complete are skipped by Cognee. Config invalidation
+        is cogindex's job — the caller must have purged anything stale."""
+        ...
+
+    async def teardown_dataset(self, handle: DatasetHandle) -> None:
+        """Remove all managed content of the dataset. Missing dataset is
+        success (no-op)."""
+        ...
+
+    def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
+        """Serialize batch application per dataset (ADR-0006). An efficiency
+        and hygiene layer: correctness never depends on holding it."""
+        ...
