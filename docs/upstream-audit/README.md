@@ -41,5 +41,14 @@ tracked file, *what it is* and *how deeply it was reviewed*, so the claim
 4. Everything else is "classified-only": identified, categorized, and judged
    not to affect the integration, with the judgment recorded per module.
 
+5. Behaviors cogindex depends on were additionally verified against the
+   **installed release artifacts** (cocoindex 1.0.18 and cognee 1.4.0 wheels
+   in the project venv), not only the pinned git clones: public API
+   signatures via `inspect.signature`, msgspec round-trips of the tracking
+   record shapes, and `is_non_existence`'s `TypeIs` behavior. Where clone and
+   wheel could diverge, the wheel is what cogindex runs against and wins.
+
 The release gate requires every first-party source file to carry an explicit
-status; "we read everything deeply" is not claimed anywhere.
+status — either directly or via a module-scoped entry in `review-state.jsonl`
+whose path prefix covers it; "we read everything deeply" is not claimed
+anywhere.
