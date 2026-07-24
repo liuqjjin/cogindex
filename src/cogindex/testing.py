@@ -13,6 +13,7 @@ integration tests (AGENTS.md hard rule #7).
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -41,6 +42,16 @@ _FAULT_OPS = frozenset(
         "dataset_lock",
     }
 )
+
+
+async def _yield_point() -> None:
+    """Cooperative yield inside every fake operation.
+
+    Real Cognee calls suspend on I/O; without an explicit yield the fake's
+    operations would run atomically on the event loop and concurrency tests
+    could never observe interleaving from a broken lock discipline.
+    """
+    await asyncio.sleep(0)
 
 
 class InjectedFault(RuntimeError):
@@ -98,7 +109,9 @@ class FakeCogneeRuntime:
 
     Every mutating call is appended to ``calls`` (op, dataset name, detail)
     so tests can assert ordering — e.g. purges before adds, one cognify per
-    batch.
+    batch. Entries record *attempts*: a scripted fault fires after the call
+    is logged but before any state changes — except add_documents, whose
+    entry lists exactly the payloads that were applied before the fault.
     """
 
     def __init__(self, *, lock_provider: LockProvider | None = None) -> None:
@@ -161,6 +174,7 @@ class FakeCogneeRuntime:
     # -- CogneeRuntime protocol ---------------------------------------------
 
     async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
+        await _yield_point()
         self._fire("resolve_dataset")
         dataset = self.datasets.get((tenant, name))
         return DatasetHandle(
@@ -174,6 +188,7 @@ class FakeCogneeRuntime:
     ) -> DatasetHandle:
         if not payloads:
             return handle
+        await _yield_point()
         fault = self._next_fault("add_documents")
         applied: list[str] = []
         dataset = self._ensure_dataset(handle)
@@ -193,8 +208,9 @@ class FakeCogneeRuntime:
     async def purge_document_memory(
         self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]
     ) -> None:
-        self._fire("purge_document_memory")
+        await _yield_point()
         self.calls.append(("purge_document_memory", handle.name, tuple(str(d) for d in data_ids)))
+        self._fire("purge_document_memory")
         dataset = self.datasets.get((handle.tenant, handle.name))
         if dataset is None:
             return
@@ -207,8 +223,9 @@ class FakeCogneeRuntime:
             document.cognify_complete = False
 
     async def delete_documents(self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]) -> None:
-        self._fire("delete_documents")
+        await _yield_point()
         self.calls.append(("delete_documents", handle.name, tuple(str(d) for d in data_ids)))
+        self._fire("delete_documents")
         dataset = self.datasets.get((handle.tenant, handle.name))
         if dataset is None:
             return
@@ -216,8 +233,9 @@ class FakeCogneeRuntime:
             dataset.documents.pop(data_id, None)
 
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
-        self._fire("cognify_dataset")
+        await _yield_point()
         self.calls.append(("cognify_dataset", handle.name, ()))
+        self._fire("cognify_dataset")
         dataset = self.datasets.get((handle.tenant, handle.name))
         if dataset is None:
             return
@@ -233,8 +251,9 @@ class FakeCogneeRuntime:
             document.cognify_complete = True
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
-        self._fire("teardown_dataset")
+        await _yield_point()
         self.calls.append(("teardown_dataset", handle.name, ()))
+        self._fire("teardown_dataset")
         dataset = self.datasets.get((handle.tenant, handle.name))
         if dataset is None:
             return

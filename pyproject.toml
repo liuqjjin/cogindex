@@ -91,7 +91,7 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
-module = ["cognee", "cognee.*", "asyncpg", "asyncpg.*"]
+module = ["cognee", "cognee.*", "asyncpg", "asyncpg.*", "testcontainers", "testcontainers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
