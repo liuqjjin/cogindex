@@ -1,0 +1,37 @@
+{
+  "$schema_note": "Machine-readable pin of the upstream commits this project was audited and developed against. Regenerate with `make upstream-lock` (see Makefile).",
+  "audit_date": "2026-07-24",
+  "upstreams": {
+    "cocoindex": {
+      "repo": "https://github.com/cocoindex-io/cocoindex",
+      "default_branch": "main",
+      "audited_commit": "20a1f4be5dfa9f178aff3463937380006a2fe959",
+      "audited_commit_date": "2026-07-23T08:34:40-07:00",
+      "latest_release_tag": "v1.0.18",
+      "commits_ahead_of_latest_release": 0,
+      "license": "Apache-2.0",
+      "requires_python": ">=3.11",
+      "notes": "HEAD of main at audit time is exactly the v1.0.18 release commit. Matches the reference audit snapshot."
+    },
+    "cognee": {
+      "repo": "https://github.com/topoteretes/cognee",
+      "default_branch": "main",
+      "audited_commit": "90b4acaac937dc1c0aeffaead8b707c896ebf3db",
+      "audited_commit_date": "2026-07-21T21:30:47+02:00",
+      "latest_release_tag": "v1.4.0",
+      "commits_ahead_of_latest_release": 192,
+      "license": "Apache-2.0",
+      "requires_python": ">=3.10,<3.15",
+      "dev_branch": {
+        "name": "dev",
+        "commit": "589a3e9077ba7230dced06d8f75d4577209afb9a",
+        "commit_date": "2026-07-23T19:18:50+02:00",
+        "ahead_of_main": 55,
+        "behind_main": 5,
+        "delta_summary": "MCP recall defaults, cognee-cli cloud fixes, graph/ladybug neighborhood edge_type filtering, examples relocation. No changes to add/cognify/delete core APIs relevant to this connector."
+      },
+      "notes": "Audit pinned to main. Matches the reference audit snapshot."
+    }
+  },
+  "python_version_intersection": ">=3.11,<3.15"
+}

@@ -1,0 +1,36 @@
+# Upstream audit clones (never vendored)
+.upstream/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Benchmark reports (reproducible, not committed)
+benchmarks/reports/
+
+# Local scratch
+.cache/
+*.log
+
+# OS
+.DS_Store
