@@ -69,3 +69,26 @@ deletes and replace-purges first, then all adds (batched), then exactly one
 `cognify`. Deterministic order (sorted by document key) keeps runs comparable
 and logs reproducible. Partial failures propagate; nothing is swallowed.
 Structured logs record phase and timing only — never content, never secrets.
+
+## Dataset teardown and unmount semantics (verified against the engine)
+
+When a dataset target stops being declared (its component path disappears),
+the engine reconciles the container to non-existence and runs its sink once
+more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
+
+- **System-managed** (`managed_by="system"`): the container sink calls
+  `teardown_dataset`, which empties the dataset via `forget(dataset_id=...)`
+  — raw data, graph, and vector derivatives. The dataset *row* survives:
+  upstream's `empty_dataset` keeps it, and there is no public dataset-row
+  delete API. Documented as an upstream limitation, not papered over.
+- **User-managed** (`managed_by="user"`): `resolve_system_transition` yields
+  no action; the runtime observes **zero mutating calls**. Note the
+  consequence: the engine drops child tracking when the container goes away
+  without issuing per-document deletes, so documents that cogindex itself
+  added remain in the dataset. `managed_by="user"` therefore means "cogindex
+  never destroys anything in this dataset", not "cogindex removes only what
+  it added". Users who want managed cleanup must use `managed_by="system"`.
+
+A dataset that never materialized (declared but nothing was ever added)
+tears down as a no-op: `teardown_dataset` resolves the name, finds no
+dataset, and returns.

@@ -15,9 +15,7 @@ import cocoindex
 _tmp_db_path_base = pathlib.Path(tempfile.mkdtemp()) / "cogindex_tests"
 
 
-def create_test_env(
-    test_file_path: str, suffix: str | None = None
-) -> cocoindex.Environment:
+def create_test_env(test_file_path: str, suffix: str | None = None) -> cocoindex.Environment:
     """Create an isolated CocoIndex Environment for a test module.
 
     Args:

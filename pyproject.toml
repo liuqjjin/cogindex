@@ -80,7 +80,12 @@ ignore = [
 
 [tool.mypy]
 strict = true
-python_version = "3.11"
+# 3.12, not the 3.11 support floor: numpy >= 2.5 ships PEP 695 `type`
+# statements in its stubs (pulled in transitively via cocoindex), which mypy
+# cannot parse under a 3.11 target (follow_imports=skip does not exempt
+# inline stub packages). Runtime 3.11 compatibility is enforced by the CI
+# test matrix instead.
+python_version = "3.12"
 files = ["src", "tests"]
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
