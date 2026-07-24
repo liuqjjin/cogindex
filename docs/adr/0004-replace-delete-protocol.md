@@ -92,3 +92,19 @@ more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
 A dataset that never materialized (declared but nothing was ever added)
 tears down as a no-op: `teardown_dataset` resolves the name, finds no
 dataset, and returns.
+
+## Amendment: the add-side skip gate (integration-tier discovery)
+
+`cognee.add()`'s per-item pipeline ALSO has a skip gate, routed whenever
+`data_cache or incremental_loading` — and both default to True. A data_id
+whose `add_pipeline` status is COMPLETED is then skipped before ingestion
+runs: replacement content would silently never be written, because
+`forget(memory_only=True)` deliberately resets only `cognify_pipeline`.
+
+The connector therefore always calls
+`add(..., incremental_loading=False, data_cache=False)`. Idempotency for
+unchanged content is preserved by ingestion's own content-hash comparison
+(no pipeline-status reset when the hash is equal, so cognify still skips),
+and the cognify-side incremental gate is unaffected. Found by — and pinned
+in — `tests/integration/test_local_cognee.py`; the initial code audit
+missed the gate's routing condition.

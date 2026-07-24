@@ -55,6 +55,10 @@ make ci               # exactly what required CI runs
 
 - Re-adding changed content to Cognee under the same `data_id` does **not**
   remove old graph/vector derivatives — `forget(memory_only=True)` first.
+- With `add()`'s defaults (`incremental_loading=True`, `data_cache=True`),
+  an already-added `data_id` is **skipped entirely** — replacement content
+  silently never lands. cogindex always passes both as False on add; do not
+  "simplify" that away (the integration replace tests will catch it).
 - Cognee's incremental cognify gate has **no config fingerprint**; config
   invalidation is cogindex's job.
 - Cognee's dataset lock is process-local asyncio only.

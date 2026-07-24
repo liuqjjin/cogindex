@@ -25,6 +25,20 @@ per-item incremental status, and the asyncio dataset lock).
   graph/vector derivatives are NOT removed** (`ingest_data.py`); chunk/entity
   ids are content-derived, so the old ones orphan. Clean replacement requires
   `forget(memory_only=True)` first — the core fact behind ADR-0004.
+- **CORRECTION (found by the integration tier, missed by the initial code
+  audit):** the `ingest_data` upsert branch above is only reachable when the
+  ADD pipeline's per-item skip gate does not fire first.
+  `run_tasks_data_item()` routes through the incremental path whenever
+  `data_cache or incremental_loading` — and **both default to True** on
+  `add()`. That path skips any data_id whose `add_pipeline` status is
+  COMPLETED before ingestion runs, so replacement content is silently never
+  written (memory-only forget deliberately resets only `cognify_pipeline`,
+  keeping `add_pipeline` intact). A connector that re-adds under stable
+  data_ids MUST call `add(..., incremental_loading=False, data_cache=False)`;
+  same-content idempotency is still guaranteed by ingestion's content-hash
+  comparison. Empirically verified in
+  `tests/integration/test_local_cognee.py` (the replace tests fail against
+  the defaults).
 - Concurrent identical inserts race on the PK; handled by a single
   `IntegrityError` retry that re-reads and takes the update path. File writes
   are content-addressed (idempotent).

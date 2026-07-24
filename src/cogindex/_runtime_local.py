@@ -96,7 +96,20 @@ class LocalCogneeRuntime:
                 )
                 for payload in group
             ]
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, Any] = {
+                # Never let the ADD pipeline's per-item skip gate swallow our
+                # payloads: with either incremental_loading=True or
+                # data_cache=True (both upstream defaults), a data_id whose
+                # add_pipeline status is COMPLETED is skipped entirely —
+                # replacement content would silently never be ingested
+                # (memory-only purge resets only cognify_pipeline, by
+                # upstream design). Idempotency for unchanged content is
+                # preserved by ingestion's own content-hash comparison, and
+                # cognify keeps its own incremental gate. Verified by the
+                # integration replace tests (ADR-0004).
+                "incremental_loading": False,
+                "data_cache": False,
+            }
             if node_set is not None:
                 kwargs["node_set"] = list(node_set)
             if importance_weight is not None:
