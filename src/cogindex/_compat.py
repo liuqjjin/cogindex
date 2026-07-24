@@ -28,6 +28,7 @@ __all__ = [
     "configure_storage",
     "configured_models",
     "credentials_present",
+    "ensure_databases_ready",
     "load",
     "storage_roots",
 ]
@@ -164,6 +165,16 @@ def configured_models() -> tuple[str | None, str | None]:
     except Exception:
         embedding_model = None
     return llm_model, embedding_model
+
+
+async def ensure_databases_ready() -> None:
+    """Create cognee's relational/graph/vector structures if absent.
+
+    Idempotent; upstream's own forget() runs the same setup defensively on
+    every call ("In case there is no database...").
+    """
+    low_level = importlib.import_module("cognee.low_level")
+    await low_level.setup()
 
 
 def storage_roots() -> tuple[str | None, str | None]:

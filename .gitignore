@@ -37,3 +37,4 @@ benchmarks/reports/
 
 # Claude Code local settings
 .claude/settings.local.json
+.cogindex-quickstart-storage/

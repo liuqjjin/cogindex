@@ -29,7 +29,7 @@ from ._locks import InProcessLockProvider, LockProvider
 from ._locks_postgres import PostgresAdvisoryLockProvider
 from ._records import DatasetConfigRecord, DocumentRecord
 from ._runtime import CogneeRuntime, DatasetHandle, DocumentPayload, StoredDocument
-from ._runtime_local import LocalCogneeRuntime
+from ._runtime_local import CogneePipelineError, LocalCogneeRuntime
 from ._spec import (
     CogneeDatasetSpec,
     CogneeDocumentSpec,
@@ -56,6 +56,7 @@ __all__ = [
     "CogindexError",
     "CogneeDatasetSpec",
     "CogneeDocumentSpec",
+    "CogneePipelineError",
     "CogneeRuntime",
     "CognifyProfile",
     "CompatibilityError",

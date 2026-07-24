@@ -90,9 +90,7 @@ async def verify_dataset(
     """
     key_string = runtime_key.key if isinstance(runtime_key, coco.ContextKey) else runtime_key
     expected_by_id: dict[uuid.UUID, ExpectedDocument] = {
-        document_data_id(
-            key_string, tenant, name, normalize_external_key(item.external_key)
-        ): item
+        document_data_id(key_string, tenant, name, normalize_external_key(item.external_key)): item
         for item in expected
     }
 

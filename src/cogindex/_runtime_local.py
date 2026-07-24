@@ -20,7 +20,7 @@ from ._locks import InProcessLockProvider, LockProvider
 from ._runtime import DatasetHandle, DocumentPayload, StoredDocument
 from ._spec import CognifyProfile
 
-__all__ = ["LocalCogneeRuntime"]
+__all__ = ["CogneePipelineError", "LocalCogneeRuntime"]
 
 logger = logging.getLogger("cogindex.runtime")
 
@@ -43,7 +43,7 @@ class LocalCogneeRuntime:
     an access-control mechanism: this runtime acts as one cognee user.
     """
 
-    __slots__ = ("_lock_provider", "_user")
+    __slots__ = ("_lock_provider", "_setup_done", "_user")
 
     def __init__(
         self,
@@ -54,14 +54,24 @@ class LocalCogneeRuntime:
         user: Any | None = None,
     ) -> None:
         _compat.load()
+        # Absolutize: cognee's file-URI storage layer rejects relative roots
+        # (deep in ingestion, with a misleading error), so normalize here.
         _compat.configure_storage(
-            str(data_root) if data_root is not None else None,
-            str(system_root) if system_root is not None else None,
+            str(Path(data_root).expanduser().resolve()) if data_root is not None else None,
+            str(Path(system_root).expanduser().resolve()) if system_root is not None else None,
         )
         self._lock_provider: LockProvider = lock_provider or InProcessLockProvider()
         self._user = user
+        self._setup_done = False
+
+    async def _ensure_ready(self) -> None:
+        """Lazily create cognee's database structures (idempotent)."""
+        if not self._setup_done:
+            await _compat.ensure_databases_ready()
+            self._setup_done = True
 
     async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
+        await self._ensure_ready()
         compat_info = _compat.load()
         datasets = await compat_info.cognee.datasets.list_datasets(user=self._user)
         for dataset in datasets:
@@ -74,6 +84,7 @@ class LocalCogneeRuntime:
     ) -> DatasetHandle:
         if not payloads:
             return handle
+        await self._ensure_ready()
         compat_info = _compat.load()
         # node_set and importance_weight are add()-call-level parameters in
         # cognee (not DataItem fields), so payloads are grouped by them.
@@ -118,7 +129,8 @@ class LocalCogneeRuntime:
                 kwargs["dataset_id"] = handle.dataset_id
             if self._user is not None:
                 kwargs["user"] = self._user
-            await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
+            result = await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
+            _raise_on_errored_runs(result, op="add", dataset=handle.name)
         if handle.dataset_id is None:
             # The dataset materialized on first add; learn its id.
             handle = await self.resolve_dataset(handle.name, handle.tenant)
@@ -133,6 +145,7 @@ class LocalCogneeRuntime:
         await self._forget_documents(handle, data_ids, memory_only=False)
 
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
+        await self._ensure_ready()
         handle = await self._ensure_resolved(handle)
         if handle.dataset_id is None:
             # Nothing was ever ingested; cognify would fail on a missing
@@ -152,9 +165,11 @@ class LocalCogneeRuntime:
             kwargs["temporal_cognify"] = True
         if self._user is not None:
             kwargs["user"] = self._user
-        await compat_info.cognee.cognify(datasets=[handle.dataset_id], **kwargs)
+        result = await compat_info.cognee.cognify(datasets=[handle.dataset_id], **kwargs)
+        _raise_on_errored_runs(result, op="cognify", dataset=handle.name)
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
+        await self._ensure_ready()
         handle = await self._ensure_resolved(handle)
         if handle.dataset_id is None:
             return
@@ -171,6 +186,7 @@ class LocalCogneeRuntime:
             )
 
     async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
+        await self._ensure_ready()
         handle = await self._ensure_resolved(handle)
         if handle.dataset_id is None:
             return []
@@ -205,6 +221,7 @@ class LocalCogneeRuntime:
     ) -> None:
         if not data_ids:
             return
+        await self._ensure_ready()
         handle = await self._ensure_resolved(handle)
         if handle.dataset_id is None:
             # Dataset never materialized: nothing to purge or delete.
@@ -241,3 +258,38 @@ class LocalCogneeRuntime:
         if handle.dataset_id is not None:
             return handle
         return await self.resolve_dataset(handle.name, handle.tenant)
+
+
+class CogneePipelineError(RuntimeError):
+    """A cognee pipeline reported errored runs instead of raising."""
+
+
+def _raise_on_errored_runs(result: Any, *, op: str, dataset: str) -> None:
+    """Fail hard when cognee swallows task errors into its result payload.
+
+    cognee's non-incremental pipeline path collects per-item failures as
+    PipelineRunErrored entries in the *return value* and does not raise.
+    Treating that as success would commit tracking records for writes that
+    never happened — the exact false-success ADR-0003 forbids.
+    """
+    errored: list[Any] = []
+
+    def collect(run_info: Any) -> None:
+        if run_info is not None and type(run_info).__name__ == "PipelineRunErrored":
+            errored.append(getattr(run_info, "payload", run_info))
+
+    entries = getattr(result, "data_ingestion_info", None)
+    if isinstance(entries, list):
+        for entry in entries:
+            if isinstance(entry, dict):
+                collect(entry.get("run_info"))
+            else:
+                collect(entry)
+    elif isinstance(result, dict):
+        for value in result.values():
+            collect(value)
+    if errored:
+        raise CogneePipelineError(
+            f"cognee {op} on dataset {dataset!r} reported "
+            f"{len(errored)} errored pipeline run(s): {errored[:3]!r}"
+        )
