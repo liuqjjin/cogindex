@@ -1,0 +1,10 @@
+cogindex
+Copyright 2026 cogindex contributors
+
+This product integrates with, and is developed against, the following
+independent open-source projects (not bundled in this distribution):
+
+- CocoIndex (https://github.com/cocoindex-io/cocoindex), Apache License 2.0
+- Cognee (https://github.com/topoteretes/cognee), Apache License 2.0
+
+See ATTRIBUTION.md for details.

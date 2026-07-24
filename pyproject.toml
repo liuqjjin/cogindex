@@ -1,0 +1,104 @@
+[project]
+name = "cogindex"
+version = "0.1.0"
+description = "Incremental, declarative materialization of CocoIndex-managed documents into Cognee knowledge graphs (a CocoIndex custom target connector)"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "cogindex contributors" }]
+requires-python = ">=3.11,<3.15"
+keywords = ["cocoindex", "cognee", "knowledge-graph", "incremental", "rag", "etl"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "cocoindex>=1.0.18,<2",
+    "cognee>=1.4.0,<1.5",
+    "msgspec>=0.18",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.31"]
+
+[project.urls]
+Repository = "https://github.com/cogindex/cogindex"
+Changelog = "https://github.com/cogindex/cogindex/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=1.0",
+    "hypothesis>=6.130",
+    "mypy>=1.16",
+    "ruff>=0.12",
+    "coverage[toml]>=7.6",
+    "testcontainers[postgres]>=4.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cogindex"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle / pyflakes
+    "I",                # isort
+    "UP",               # pyupgrade
+    "B",                # bugbear
+    "C4",               # comprehensions
+    "SIM",              # simplify
+    "RUF",              # ruff-specific
+    "ASYNC",            # async pitfalls
+    "S",                # bandit (security)
+    "T20",              # no stray print
+]
+ignore = [
+    "E501",   # line length handled by formatter
+    "S101",   # asserts are fine (and required in tests)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "T20"]
+"examples/**" = ["T20"]
+"benchmarks/**" = ["T20"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src", "tests"]
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
+
+[[tool.mypy.overrides]]
+module = ["cognee", "cognee.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "property: Hypothesis property/state-machine tests (no external services)",
+    "integration: real local Cognee stack (SQLite + LanceDB + embedded graph), no LLM key required",
+    "integration_llm: opt-in tests that call a real LLM provider (requires API key)",
+    "postgres: requires a PostgreSQL server (testcontainers or POSTGRES_DSN)",
+]
+
+[tool.coverage.run]
+source = ["src/cogindex"]
+branch = true
