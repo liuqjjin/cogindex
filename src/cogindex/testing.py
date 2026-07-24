@@ -21,7 +21,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from ._identity import canonical_join, fingerprint_content
 from ._locks import InProcessLockProvider, LockProvider
-from ._runtime import DatasetHandle, DocumentPayload
+from ._runtime import DatasetHandle, DocumentPayload, StoredDocument
 from ._spec import CognifyProfile
 
 __all__ = [
@@ -259,6 +259,23 @@ class FakeCogneeRuntime:
             return
         # Mirrors upstream empty_dataset: contents removed, dataset row kept.
         dataset.documents.clear()
+
+    async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
+        await _yield_point()
+        dataset = self.datasets.get((handle.tenant, handle.name))
+        if dataset is None:
+            return []
+        return [
+            StoredDocument(
+                data_id=data_id,
+                label=document.payload.label,
+                external_metadata=document.payload.external_metadata,
+                cognify_complete=document.cognify_complete,
+            )
+            for data_id, document in sorted(
+                dataset.documents.items(), key=lambda item: str(item[0])
+            )
+        ]
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
         return self._locked(handle)

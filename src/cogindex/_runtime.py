@@ -10,7 +10,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from ._spec import CognifyProfile
 
-__all__ = ["CogneeRuntime", "DatasetHandle", "DocumentPayload"]
+__all__ = ["CogneeRuntime", "DatasetHandle", "DocumentPayload", "StoredDocument"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,16 @@ class DocumentPayload:
     external_metadata: dict[str, Any] | None = None
     node_set: tuple[str, ...] | None = None
     importance_weight: float | None = None
+
+
+@dataclass(frozen=True)
+class StoredDocument:
+    """Read-side view of one stored document, as drift verification needs it."""
+
+    data_id: uuid.UUID
+    label: str | None
+    external_metadata: dict[str, Any] | None
+    cognify_complete: bool
 
 
 @runtime_checkable
@@ -86,6 +96,11 @@ class CogneeRuntime(Protocol):
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
         """Remove all managed content of the dataset. Missing dataset is
         success (no-op)."""
+        ...
+
+    async def list_documents(self, handle: DatasetHandle) -> Sequence[StoredDocument]:
+        """Read-only view of the dataset's documents for drift verification.
+        A missing dataset yields an empty sequence."""
         ...
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:

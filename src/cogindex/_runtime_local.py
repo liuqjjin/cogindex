@@ -17,7 +17,7 @@ from typing import Any
 from . import _compat
 from ._identity import canonical_join
 from ._locks import InProcessLockProvider, LockProvider
-from ._runtime import DatasetHandle, DocumentPayload
+from ._runtime import DatasetHandle, DocumentPayload, StoredDocument
 from ._spec import CognifyProfile
 
 __all__ = ["LocalCogneeRuntime"]
@@ -156,6 +156,31 @@ class LocalCogneeRuntime:
                 handle.name,
                 type(exc).__name__,
             )
+
+    async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
+        handle = await self._ensure_resolved(handle)
+        if handle.dataset_id is None:
+            return []
+        compat_info = _compat.load()
+        rows = await compat_info.cognee.datasets.list_data(handle.dataset_id, user=self._user)
+        documents: list[StoredDocument] = []
+        dataset_id_str = str(handle.dataset_id)
+        for row in rows:
+            pipeline_status = row.pipeline_status or {}
+            status = pipeline_status.get(_compat.COGNIFY_PIPELINE_NAME, {}).get(dataset_id_str)
+            documents.append(
+                StoredDocument(
+                    data_id=row.id,
+                    label=row.label,
+                    external_metadata=(
+                        dict(row.external_metadata)
+                        if isinstance(row.external_metadata, dict)
+                        else None
+                    ),
+                    cognify_complete=status == _compat.COGNIFY_COMPLETE_STATUS,
+                )
+            )
+        return sorted(documents, key=lambda document: str(document.data_id))
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
         return self._lock_provider.lock(

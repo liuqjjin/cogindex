@@ -21,7 +21,22 @@ from typing import Any
 
 from ._errors import CompatibilityError
 
-__all__ = ["CogneeCompat", "configure_storage", "configured_models", "load"]
+__all__ = [
+    "COGNIFY_COMPLETE_STATUS",
+    "COGNIFY_PIPELINE_NAME",
+    "CogneeCompat",
+    "configure_storage",
+    "configured_models",
+    "credentials_present",
+    "load",
+    "storage_roots",
+]
+
+# The per-item incremental gate (audited: modules/pipelines/models/
+# DataItemStatus.py and the forget() status-reset path). The literal is the
+# enum's value, stable across the supported range.
+COGNIFY_PIPELINE_NAME = "cognify_pipeline"
+COGNIFY_COMPLETE_STATUS = "DATA_ITEM_PROCESSING_COMPLETED"
 
 _SUPPORTED_MINOR = (1, 4)
 
@@ -149,6 +164,46 @@ def configured_models() -> tuple[str | None, str | None]:
     except Exception:
         embedding_model = None
     return llm_model, embedding_model
+
+
+def storage_roots() -> tuple[str | None, str | None]:
+    """Best-effort read of cognee's configured (data, system) root paths."""
+    try:
+        base_config_module = importlib.import_module("cognee.base_config")
+        base = base_config_module.get_base_config()
+        return str(base.data_root_directory), str(base.system_root_directory)
+    except Exception:
+        return None, None
+
+
+def credentials_present() -> tuple[bool | None, bool | None]:
+    """Whether (llm, embedding) credentials look usable. None = unknown.
+
+    "Usable" means an API key is set, or the provider is a local one that
+    needs none (ollama / custom endpoints)."""
+    keyless_providers = {"ollama", "custom"}
+    llm_ok: bool | None
+    embedding_ok: bool | None
+    try:
+        llm_config_module = importlib.import_module("cognee.infrastructure.llm.config")
+        llm = llm_config_module.get_llm_config()
+        llm_ok = bool(llm.llm_api_key) or llm.llm_provider in keyless_providers
+    except Exception:
+        llm_ok = None
+    try:
+        embedding_config_module = importlib.import_module(
+            "cognee.infrastructure.databases.vector.embeddings.config"
+        )
+        embedding = embedding_config_module.get_embedding_config()
+        embedding_ok = (
+            bool(embedding.embedding_api_key)
+            or embedding.embedding_provider in keyless_providers
+            # Many providers fall back to the LLM key for embeddings.
+            or (llm_ok is True and embedding.embedding_provider == "openai")
+        )
+    except Exception:
+        embedding_ok = None
+    return llm_ok, embedding_ok
 
 
 def _warn_if_untested_version(version: str) -> None:

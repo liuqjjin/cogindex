@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from cocoindex.connectorkits.target import ManagedBy
 
+from ._doctor import DoctorFinding, DoctorReport, doctor
 from ._errors import (
     CogindexError,
     CompatibilityError,
@@ -27,7 +28,7 @@ from ._identity import (
 from ._locks import InProcessLockProvider, LockProvider
 from ._locks_postgres import PostgresAdvisoryLockProvider
 from ._records import DatasetConfigRecord, DocumentRecord
-from ._runtime import CogneeRuntime, DatasetHandle, DocumentPayload
+from ._runtime import CogneeRuntime, DatasetHandle, DocumentPayload, StoredDocument
 from ._runtime_local import LocalCogneeRuntime
 from ._spec import (
     CogneeDatasetSpec,
@@ -42,6 +43,12 @@ from ._target import (
     declare_dataset_target,
     mount_dataset_target,
 )
+from ._verify import (
+    ExpectedDocument,
+    VerificationIssue,
+    VerificationReport,
+    verify_dataset,
+)
 
 __all__ = [
     "COGINDEX_NAMESPACE",
@@ -55,8 +62,11 @@ __all__ = [
     "DatasetConfigRecord",
     "DatasetHandle",
     "DatasetTarget",
+    "DoctorFinding",
+    "DoctorReport",
     "DocumentPayload",
     "DocumentRecord",
+    "ExpectedDocument",
     "InProcessLockProvider",
     "LocalCogneeRuntime",
     "LockProvider",
@@ -64,12 +74,17 @@ __all__ = [
     "ManagedBy",
     "PostgresAdvisoryLockProvider",
     "ProcessingConfig",
+    "StoredDocument",
     "UnsupportedCapabilityError",
+    "VerificationIssue",
+    "VerificationReport",
     "dataset_target",
     "declare_dataset_target",
+    "doctor",
     "document_data_id",
     "mount_dataset_target",
     "processing_config_from_profile",
+    "verify_dataset",
 ]
 
 __version__ = "0.1.0"
