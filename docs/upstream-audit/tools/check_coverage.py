@@ -54,9 +54,7 @@ def check_repo(repo: str) -> tuple[int, int, list[str]]:
             continue
         gaps.append(path)
 
-    stale = sorted(
-        p for p in file_entries if not any(str(r["path"]) == p for r in inventory)
-    )
+    stale = sorted(p for p in file_entries if not any(str(r["path"]) == p for r in inventory))
     for p in stale:
         print(f"  WARN {repo}: review-state file entry not in inventory: {p}")
 

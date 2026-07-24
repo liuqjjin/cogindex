@@ -61,7 +61,9 @@ def deterministic_llm() -> Iterator[None]:
             return "test"
         if response_model is str:
             # search answer generation
-            return "deterministic demo answer (LLM output is mocked; use a real key for real answers)"
+            return (
+                "deterministic demo answer (LLM output is mocked; use a real key for real answers)"
+            )
         if response_model is SummarizedContent:
             summary = text_input.strip().split("\n")[0][:80] or "empty document"
             return SummarizedContent(summary=summary, description=summary)

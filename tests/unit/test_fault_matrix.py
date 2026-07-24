@@ -335,7 +335,7 @@ async def test_concurrent_batches_serialize_under_dataset_lock() -> None:
     ids_two = {str(did(key)) for key in batch_two}
     for segment in segments:
         segment_ids = {item for call in segment if call[0] == "add_documents" for item in call[2]}
-        assert segment_ids == ids_one or segment_ids == ids_two
+        assert segment_ids in (ids_one, ids_two)
 
     # Both batches fully converged.
     dataset = fake.dataset(TENANT, DATASET)

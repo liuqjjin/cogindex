@@ -25,34 +25,109 @@ from pathlib import Path
 # Category rules are ordered: first match wins.
 # (category, reason) selected by predicate on the repo-relative posix path.
 _BINARY_EXTS = {
-    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp", ".pdf",
-    ".woff", ".woff2", ".ttf", ".otf", ".eot", ".mp4", ".mov", ".zip",
-    ".gz", ".parquet", ".lance", ".bin", ".onnx", ".pt", ".npy", ".db",
-    ".sqlite", ".xlsx", ".pptx", ".docx", ".wasm",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".ico",
+    ".svg",
+    ".webp",
+    ".pdf",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".mp4",
+    ".mov",
+    ".zip",
+    ".gz",
+    ".parquet",
+    ".lance",
+    ".bin",
+    ".onnx",
+    ".pt",
+    ".npy",
+    ".db",
+    ".sqlite",
+    ".xlsx",
+    ".pptx",
+    ".docx",
+    ".wasm",
 }
 _DOC_EXTS = {".md", ".mdx", ".rst", ".txt", ".adoc", ".ipynb"}
 _LANG_BY_EXT = {
-    ".py": "python", ".pyi": "python-stub", ".rs": "rust", ".ts": "typescript",
-    ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
-    ".mjs": "javascript", ".cjs": "javascript", ".sql": "sql", ".sh": "shell",
-    ".bash": "shell", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml",
-    ".json": "json", ".jsonl": "json", ".md": "markdown", ".mdx": "markdown",
-    ".rst": "rst", ".txt": "text", ".html": "html", ".css": "css",
-    ".astro": "astro", ".proto": "protobuf", ".cfg": "ini", ".ini": "ini",
-    ".ipynb": "notebook", ".robot": "robotframework", ".tf": "terraform",
+    ".py": "python",
+    ".pyi": "python-stub",
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".sql": "sql",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".toml": "toml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".json": "json",
+    ".jsonl": "json",
+    ".md": "markdown",
+    ".mdx": "markdown",
+    ".rst": "rst",
+    ".txt": "text",
+    ".html": "html",
+    ".css": "css",
+    ".astro": "astro",
+    ".proto": "protobuf",
+    ".cfg": "ini",
+    ".ini": "ini",
+    ".ipynb": "notebook",
+    ".robot": "robotframework",
+    ".tf": "terraform",
 }
 _CI_BASENAMES = {
-    "makefile", "dockerfile", "justfile", ".dockerignore", ".gitignore",
-    ".gitattributes", ".editorconfig", ".pre-commit-config.yaml",
-    ".prettierrc", ".eslintrc", ".npmrc", ".python-version", ".tool-versions",
-    "renovate.json", ".releaserc", ".codecov.yml", "codecov.yml",
-    "pytest.ini", "tox.ini", "setup.cfg", "mkdocs.yml", "conftest.py",
-    ".env.template", ".env.example", ".deepsource.toml", "vercel.json",
-    ".coderabbit.yaml", "lefthook.yml", "prek.yaml",
+    "makefile",
+    "dockerfile",
+    "justfile",
+    ".dockerignore",
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+    ".pre-commit-config.yaml",
+    ".prettierrc",
+    ".eslintrc",
+    ".npmrc",
+    ".python-version",
+    ".tool-versions",
+    "renovate.json",
+    ".releaserc",
+    ".codecov.yml",
+    "codecov.yml",
+    "pytest.ini",
+    "tox.ini",
+    "setup.cfg",
+    "mkdocs.yml",
+    "conftest.py",
+    ".env.template",
+    ".env.example",
+    ".deepsource.toml",
+    "vercel.json",
+    ".coderabbit.yaml",
+    "lefthook.yml",
+    "prek.yaml",
 }
 _LOCK_BASENAMES = {
-    "uv.lock", "cargo.lock", "package-lock.json", "poetry.lock", "yarn.lock",
-    "pnpm-lock.yaml", "composer.lock", "gemfile.lock",
+    "uv.lock",
+    "cargo.lock",
+    "package-lock.json",
+    "poetry.lock",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "composer.lock",
+    "gemfile.lock",
 }
 
 
@@ -75,20 +150,39 @@ def classify(path: str) -> tuple[str, str]:
     if parts[0] == ".github" or base in _CI_BASENAMES:
         return "build/CI", ".github or build/config file"
     if ext in (".yml", ".yaml") and any(
-        s in p for s in ("docker-compose", "compose.", "ci", "workflow", "helm", "k8s", "kubernetes")
+        s in p
+        for s in ("docker-compose", "compose.", "ci", "workflow", "helm", "k8s", "kubernetes")
     ):
         return "build/CI", "CI/deploy config"
-    if base in ("pyproject.toml", "cargo.toml", "package.json", "tsconfig.json", "build.rs", "setup.py"):
+    if base in (
+        "pyproject.toml",
+        "cargo.toml",
+        "package.json",
+        "tsconfig.json",
+        "build.rs",
+        "setup.py",
+    ):
         return "build/CI", "build manifest"
     if parts[0] in ("deployment", "helm", "docker", "ops", "infra", ".devcontainer", "dev"):
         return "build/CI", f"ops/dev tooling tree ({parts[0]}/)"
 
-    if any(seg in ("tests", "test", "e2e_tests", "integration_tests") for seg in parts) or base.startswith(
-        "test_"
-    ) or base.endswith("_test.py"):
+    if (
+        any(seg in ("tests", "test", "e2e_tests", "integration_tests") for seg in parts)
+        or base.startswith("test_")
+        or base.endswith("_test.py")
+    ):
         return "test", "test tree or test_* naming"
 
-    if parts[0] in ("docs", "doc", "examples", "demos", "notebooks", "examples_data", "assets", "static"):
+    if parts[0] in (
+        "docs",
+        "doc",
+        "examples",
+        "demos",
+        "notebooks",
+        "examples_data",
+        "assets",
+        "static",
+    ):
         return "docs/example", f"docs/examples tree ({parts[0]}/)"
     if ext in _DOC_EXTS:
         return "docs/example", f"documentation file ({ext})"
@@ -109,13 +203,17 @@ def module_of(path: str, repo: str) -> str:
         if path.startswith("python/cocoindex/connectors/") and len(parts) > 3:
             return f"python/connectors/{parts[3]}"
         if path.startswith("python/cocoindex/"):
-            return "/".join(["python"] + parts[2:3])
+            return "/".join(["python", *parts[2:3]])
         if path.startswith("rust/"):
             return "/".join(parts[:3])
         return parts[0]
     # cognee
     if path.startswith("cognee/") and len(parts) > 2:
-        return f"cognee/{parts[1]}" + (f"/{parts[2]}" if parts[1] in ("modules", "infrastructure", "api", "tasks") and len(parts) > 3 else "")
+        return f"cognee/{parts[1]}" + (
+            f"/{parts[2]}"
+            if parts[1] in ("modules", "infrastructure", "api", "tasks") and len(parts) > 3
+            else ""
+        )
     return parts[0]
 
 
@@ -128,11 +226,15 @@ def main() -> int:
 
     ls = subprocess.run(
         ["git", "-C", str(args.clone_dir), "ls-files", "-s"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     commit = subprocess.run(
         ["git", "-C", str(args.clone_dir), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
     records = []
@@ -178,13 +280,13 @@ def main() -> int:
     for r in records:
         if r["loc"]:
             loc_by_cat[r["category"]] += r["loc"]
-    by_module = Counter(
-        r["module"] for r in records if r["category"] == "first-party source"
-    )
+    by_module = Counter(r["module"] for r in records if r["category"] == "first-party source")
     with open(args.output_dir / "summary.md", "w") as f:
         f.write(f"# {args.name} inventory summary\n\n")
         f.write(f"- commit: `{commit}`\n- tracked files: {len(records)}\n\n")
-        f.write("## Files by category\n\n| category | files | LOC (source/test only) |\n|---|---|---|\n")
+        f.write(
+            "## Files by category\n\n| category | files | LOC (source/test only) |\n|---|---|---|\n"
+        )
         for cat, n in by_cat.most_common():
             f.write(f"| {cat} | {n} | {loc_by_cat.get(cat, '')} |\n")
         f.write("\n## First-party source files by module\n\n| module | files |\n|---|---|\n")
