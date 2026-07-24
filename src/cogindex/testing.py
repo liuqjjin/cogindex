@@ -51,22 +51,25 @@ class InjectedFault(RuntimeError):
 class FakeDocument:
     """One stored document plus the state of its emulated derivatives.
 
-    ``derived_from``/``derived_profile`` describe what the current
-    graph/vector derivatives were built from (None = no derivatives).
-    Upstream-faithfully, they survive re-adds with changed content — that
-    staleness is exactly what cogindex's replace protocol must prevent.
+    ``derived_fragments`` holds the content fingerprints whose graph/vector
+    derivatives currently exist. Upstream-faithfully, cognify *adds* the
+    current content's derivatives and nothing removes old ones except an
+    explicit memory purge — re-adding changed content and cognifying without
+    purging leaves orphaned derivatives behind. That accumulation is exactly
+    the hazard ADR-0004's replace protocol closes, so the emulator must make
+    it observable.
     """
 
     payload: DocumentPayload
     cognify_complete: bool = False
-    derived_from: str | None = None
+    derived_fragments: set[str] = dataclasses.field(default_factory=set)
     derived_profile: CognifyProfile | None = None
 
     @property
     def derivatives_stale(self) -> bool:
-        return self.derived_from is not None and self.derived_from != (
-            fingerprint_content(self.payload.content)
-        )
+        """True if any existing derivative was built from other content."""
+        current = fingerprint_content(self.payload.content)
+        return bool(self.derived_fragments - {current})
 
 
 @dataclasses.dataclass
@@ -136,6 +139,10 @@ class FakeCogneeRuntime:
             _Fault(remaining=times, after_items=after_items, exc_factory=exc_factory)
         )
 
+    def clear_faults(self) -> None:
+        """Drop all queued fault scripts (e.g. one-sync-scoped injection)."""
+        self._faults.clear()
+
     def _next_fault(self, op: str) -> _Fault | None:
         scripts = self._faults.get(op)
         if not scripts:
@@ -195,7 +202,7 @@ class FakeCogneeRuntime:
             document = dataset.documents.get(data_id)
             if document is None:
                 continue
-            document.derived_from = None
+            document.derived_fragments.clear()
             document.derived_profile = None
             document.cognify_complete = False
 
@@ -221,7 +228,7 @@ class FakeCogneeRuntime:
             # emulation must be able to expose it when cogindex gets it wrong.
             if document.cognify_complete:
                 continue
-            document.derived_from = fingerprint_content(document.payload.content)
+            document.derived_fragments.add(fingerprint_content(document.payload.content))
             document.derived_profile = profile
             document.cognify_complete = True
 
@@ -260,7 +267,7 @@ class FakeCogneeRuntime:
         for data_id, document in dataset.documents.items():
             if (
                 not document.cognify_complete
-                or document.derived_from != fingerprint_content(document.payload.content)
+                or document.derived_fragments != {fingerprint_content(document.payload.content)}
                 or (profile is not None and document.derived_profile != profile)
             ):
                 result.append(data_id)

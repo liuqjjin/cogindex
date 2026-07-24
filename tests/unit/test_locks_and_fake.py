@@ -160,7 +160,7 @@ async def test_add_then_cognify_completes_with_content_fingerprint() -> None:
     await runtime.cognify_dataset(handle, CognifyProfile())
     document = _document(runtime, data_id)
     assert document.cognify_complete is True
-    assert document.derived_from == fingerprint_content("hello world")
+    assert document.derived_fragments == {fingerprint_content("hello world")}
     assert document.derivatives_stale is False
 
 
@@ -177,8 +177,33 @@ async def test_readd_changed_content_keeps_stale_derivatives() -> None:
     document = _document(runtime, data_id)
     # Upstream behavior: status resets, but old derivatives are NOT removed.
     assert document.cognify_complete is False
-    assert document.derived_from == old_fingerprint
+    assert document.derived_fragments == {old_fingerprint}
     assert document.derivatives_stale is True
+
+
+async def test_cognify_without_purge_accumulates_orphaned_derivatives() -> None:
+    """The upstream hazard ADR-0004's replace protocol closes: re-adding
+    changed content and cognifying WITHOUT a purge leaves the old content's
+    derivatives orphaned next to the new ones."""
+    runtime = FakeCogneeRuntime()
+    data_id = _data_id("doc-1")
+    profile = CognifyProfile()
+    handle = await runtime.add_documents(
+        _handle(), [DocumentPayload(data_id=data_id, content="version one")]
+    )
+    await runtime.cognify_dataset(handle, profile)
+
+    await runtime.add_documents(handle, [DocumentPayload(data_id=data_id, content="version two")])
+    await runtime.cognify_dataset(handle, profile)
+
+    document = _document(runtime, data_id)
+    assert document.cognify_complete is True
+    assert document.derived_fragments == {
+        fingerprint_content("version one"),
+        fingerprint_content("version two"),
+    }
+    assert document.derivatives_stale is True
+    assert runtime.unconverged_documents(TENANT, DATASET) == [data_id]
 
 
 async def test_readd_same_content_different_label_keeps_complete() -> None:
@@ -209,14 +234,14 @@ async def test_purge_document_memory_resets_then_cognify_rebuilds() -> None:
 
     await runtime.purge_document_memory(handle, [data_id])
     document = _document(runtime, data_id)
-    assert document.derived_from is None
+    assert document.derived_fragments == set()
     assert document.derived_profile is None
     assert document.cognify_complete is False
 
     await runtime.cognify_dataset(handle, profile)
     document = _document(runtime, data_id)
     assert document.cognify_complete is True
-    assert document.derived_from == fingerprint_content("content")
+    assert document.derived_fragments == {fingerprint_content("content")}
     assert document.derived_profile == profile
 
 
