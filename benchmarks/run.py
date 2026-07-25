@@ -71,4 +71,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # Hard exit rather than returning through the interpreter's shutdown. In
+    # real mode cognee leaves its graph-worker harness running on non-daemon
+    # threads, so a normal exit blocks in threading._shutdown long after the
+    # reports are on disk (observed: half an hour). Everything this process
+    # owns is already flushed by here.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

@@ -1,11 +1,13 @@
-"""The six benchmark categories (ADR-0003's operational claims, measured).
+"""ADR-0003's operational claims, measured.
 
-1. initial_ingest       — first sync of N documents
-2. incremental_update   — resync after changing K of N (work ∝ K, not N)
-3. freshness            — per-change sync latency distribution
-4. deletion             — removing K of N converges and costs O(K)
-5. crash_recovery       — cost of converging after a mid-batch crash (fake mode)
-6. verify_read          — drift verification read path over N documents
+0. baseline_comparison  what a hand-rolled integration does instead (see
+                        baseline.py; real mode only)
+1. initial_ingest       first sync of N documents
+2. incremental_update   resync after changing K of N (work proportional to K)
+3. freshness            per-change sync latency distribution
+4. deletion             removing K of N converges and costs O(K)
+5. crash_recovery       cost of converging after a mid-batch crash (fake mode)
+6. verify_read          drift verification read path over N documents
 
 Modes:
 - ``fake``: connector layer over the in-memory FakeCogneeRuntime — measures
@@ -34,6 +36,7 @@ from cogindex import ExpectedDocument, ProcessingConfig, verify_dataset
 from cogindex.testing import FakeCogneeRuntime
 
 from ._harness import BenchResult, percentile
+from .baseline import bench_baseline_comparison
 
 RUNTIME_KEY = coco.ContextKey[cogindex.CogneeRuntime]("cogindex_bench_runtime")
 PROCESSING = ProcessingConfig(graph_model_id="bench.Model")
@@ -116,6 +119,22 @@ class BenchContext:
         await self._app.update().result()
         return time.perf_counter() - started
 
+    def llm_calls(self) -> int:
+        """Extraction calls issued so far, or -1 when no LLM is in play.
+
+        The metric that survives leaving this machine. Wall-clock here is
+        mostly database overhead, because the LLM is a deterministic stub; in
+        production a single extraction is seconds of latency and a line on an
+        invoice, so "how many documents got re-extracted" is what a reader
+        should compare, and it does not depend on the hardware.
+        """
+        if self.mode != "real":
+            return -1
+        from cognee.infrastructure.llm import LLMGateway
+
+        count = getattr(LLMGateway.acreate_structured_output, "call_count", None)
+        return int(count) if count is not None else -1
+
     # -- fake-mode op accounting ---------------------------------------------
 
     def op_calls(self, op: str) -> int:
@@ -146,8 +165,16 @@ def deterministic_llm() -> Iterator[None]:
         if response_model is SummarizedContent:
             return SummarizedContent(summary="bench summary", description="bench summary")
         if response_model is KnowledgeGraph:
+            # One node per document, named after the document's own marker
+            # token. Distinctness matters: the baseline comparison counts graph
+            # nodes that no current document supports, and a stub that collapsed
+            # different documents onto one node would hide exactly that.
             token = next(
-                (word for word in text_input.split() if word.startswith("Entity")),
+                (
+                    word.rstrip(".,")
+                    for word in text_input.split()
+                    if word[:1].isupper() and word.rstrip(".,") != "Document"
+                ),
                 "BenchNode",
             )
             return KnowledgeGraph(
@@ -185,25 +212,45 @@ async def bench_incremental_update(mode: str, sizes: dict[str, int]) -> BenchRes
     n, k = sizes["n_docs"], sizes["k_changes"]
     ctx = BenchContext(mode, "incremental")
     await ctx.prepare()
+
+    llm_start = ctx.llm_calls()
     full_seconds = await ctx.sync(_docs(n))
+    llm_after_full = ctx.llm_calls()
     adds_before = ctx.added_ids()
+
+    # A re-run with nothing changed. The floor for any incremental system, and
+    # the one an integration without stable identity cannot reach.
+    unchanged_seconds = await ctx.sync(_docs(n))
+    llm_after_unchanged = ctx.llm_calls()
+
     inc_seconds = await ctx.sync(_docs(n, version=1, changed_first=k))
+    llm_after_incremental = ctx.llm_calls()
+
     metrics: dict[str, Any] = {
         "full_sync_seconds": round(full_seconds, 4),
+        "unchanged_resync_seconds": round(unchanged_seconds, 4),
         "incremental_seconds": round(inc_seconds, 4),
         "incremental_vs_full_ratio": round(inc_seconds / full_seconds, 3),
+        "changed_docs": k,
     }
     if mode == "fake":
         adds_incremental = ctx.added_ids() - adds_before
-        metrics["changed_docs"] = k
         metrics["docs_written_incrementally"] = adds_incremental
         metrics["wasted_writes"] = adds_incremental - k
+    else:
+        metrics["llm_calls_full_sync"] = llm_after_full - llm_start
+        metrics["llm_calls_unchanged_resync"] = llm_after_unchanged - llm_after_full
+        metrics["llm_calls_incremental"] = llm_after_incremental - llm_after_unchanged
     return BenchResult(
         "incremental_update",
         {"n_docs": n, "k_changes": k, "mode": mode},
         metrics,
-        notes="wasted_writes must be 0: incremental work is proportional to "
-        "the change set, never the corpus.",
+        notes=(
+            "Work must scale with the change set, not the corpus. In fake mode "
+            "that shows up as wasted_writes == 0; in real mode as extraction "
+            "calls: a re-run with nothing changed must cost zero, and changing "
+            f"{k} of {n} documents must cost far fewer than a full sync."
+        ),
     )
 
 
@@ -312,6 +359,7 @@ async def bench_verify_read(mode: str, sizes: dict[str, int]) -> BenchResult:
 
 
 CATEGORIES = {
+    "baseline_comparison": bench_baseline_comparison,
     "initial_ingest": bench_initial_ingest,
     "incremental_update": bench_incremental_update,
     "freshness": bench_freshness,
