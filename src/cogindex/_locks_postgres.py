@@ -4,7 +4,7 @@ For multiple updater processes sharing one Cognee deployment. Session-scoped
 ``pg_advisory_lock``: if the holding connection dies, PostgreSQL releases the
 lock, so nothing has to sweep up stale ones.
 
-Requires the ``postgres`` extra: ``pip install cogindex[postgres]``.
+Requires the ``postgres`` extra, which pulls in asyncpg.
 """
 
 from __future__ import annotations
@@ -86,6 +86,6 @@ def _import_asyncpg() -> Any:
     except ImportError as exc:
         raise CompatibilityError(
             "PostgresAdvisoryLockProvider requires asyncpg; "
-            "install with: pip install 'cogindex[postgres]'"
+            "reinstall with the 'postgres' extra to pull it in"
         ) from exc
     return asyncpg

@@ -62,7 +62,7 @@ def _check_cocoindex() -> DoctorFinding:
             severity="critical",
             check="cocoindex",
             detail="cocoindex is not installed",
-            fix_hint="pip install cogindex (pulls cocoindex as a dependency)",
+            fix_hint="reinstall cogindex; cocoindex is a required dependency",
         )
     return DoctorFinding(severity="ok", check="cocoindex", detail=f"version {version}")
 
