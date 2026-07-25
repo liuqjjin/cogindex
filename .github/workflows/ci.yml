@@ -39,7 +39,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --all-extras
-      - run: uv run coverage run -m pytest tests/unit tests/property -q
+      # Includes the integration tier: it drives a real local Cognee with
+      # deterministic model substitutes, so it needs no service and no key, and
+      # leaving it out understates coverage of the runtime layer by a wide
+      # margin. Only the postgres and real-LLM tiers are excluded.
+      - run: >
+          uv run coverage run -m pytest tests/unit tests/property tests/integration
+          -q -m "not postgres and not integration_llm"
       - run: uv run coverage report
       - run: uv run coverage xml
       - uses: codecov/codecov-action@v7

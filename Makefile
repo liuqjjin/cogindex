@@ -35,8 +35,9 @@ test-llm:         ## Opt-in: real LLM provider (requires LLM_API_KEY)
 test-postgres:    ## PostgreSQL advisory-lock tests (Docker/testcontainers or POSTGRES_DSN)
 	$(UV) run pytest tests/integration -q -m postgres
 
-coverage:         ## Line+branch coverage over the unit and property tiers
-	$(UV) run coverage run -m pytest tests/unit tests/property -q
+coverage:         ## Line+branch coverage over every tier that needs no service
+	$(UV) run coverage run -m pytest tests/unit tests/property tests/integration \
+		-q -m "not postgres and not integration_llm"
 	$(UV) run coverage report
 	$(UV) run coverage xml
 

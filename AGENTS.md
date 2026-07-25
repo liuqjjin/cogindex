@@ -25,7 +25,7 @@ make test-property     # Hypothesis state machine
 make test-integration  # real local Cognee, deterministic LLM (about 2 minutes)
 make test-postgres     # needs Docker or POSTGRES_DSN
 make test-llm          # opt-in, real provider, costs money
-make coverage          # currently 87% over the service-free tiers
+make coverage          # unit + property + integration; currently 89%
 make smoke             # build a wheel and import it in a clean venv
 ```
 

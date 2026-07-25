@@ -142,7 +142,10 @@ Known limits, upstream-constrained:
 | postgres | advisory-lock semantics including crash release, against a real PostgreSQL | `make test-postgres` |
 | llm | opt-in, real provider end to end | `make test-llm` |
 
-Coverage across the tiers that need no external services is 87%.
+Coverage across the tiers that need no external service is 89%, which is what
+the `coverage` job in CI reports. The two modules well below it,
+`_locks_postgres` and `_doctor`, are covered by the postgres tier and by
+inspection respectively.
 
 Fake-runtime tests are never presented as integration tests. The in-memory fake
 deliberately reproduces Cognee's hazards, including orphaned derivatives on
