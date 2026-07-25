@@ -4,9 +4,14 @@ name: Release
 # matches the version in the package, publishes to PyPI through Trusted
 # Publishing, and opens a GitHub release.
 #
-# Trusted Publishing means no API token lives in this repository: PyPI is
-# configured to accept an OIDC identity scoped to this workflow file. Setup is
-# at https://pypi.org/manage/project/cogindex/settings/publishing/.
+# Trusted Publishing means no API token lives in this repository: PyPI accepts
+# a short-lived OIDC identity scoped to this workflow file and this
+# environment. It has to be registered on PyPI before the first release, and
+# for a project that does not exist there yet that happens under
+# https://pypi.org/manage/account/publishing/ as a "pending publisher"; the
+# per-project settings page only appears once a release has landed. The claims
+# must match exactly: owner liuqjjin, repository cogindex, workflow
+# release.yml, environment pypi. A mismatch fails with `invalid-publisher`.
 
 on:
   push:
@@ -20,8 +25,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9
         with:
           python-version: "3.12"
 
@@ -38,7 +43,7 @@ jobs:
       - run: uv build
       - name: Wheel installs and imports in a clean environment
         run: scripts/smoke_install.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -51,7 +56,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -64,8 +69,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/

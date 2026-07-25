@@ -23,11 +23,15 @@ document behaviour that is easy to get wrong:
 
 ## Status
 
-None have been filed yet. They are drafts against the commits pinned in
-[`UPSTREAM_LOCK.json`](../../UPSTREAM_LOCK.json), and the audit findings each
-one rests on are in [`../upstream-audit/`](../upstream-audit/).
+These are not filed upstream, and are kept here as design documentation rather
+than as pending submissions. Their job in this repository is to answer "why
+doesn't cogindex just do X", where X is blocked by something outside it: a
+reader who wonders why there is no remote runtime gets 0002 instead of an
+apology.
 
-Before filing any of them, re-check the claim against upstream's current
-`main`: these were written at a point in time and cognee moves quickly. The
-audit ledger records exactly which commit each observation came from, which is
-what makes that re-check cheap.
+Each one is written against the commits pinned in
+[`UPSTREAM_LOCK.json`](../../UPSTREAM_LOCK.json), and the audit finding it
+rests on is in [`../upstream-audit/`](../upstream-audit/) with the file and
+line it came from. Anyone who does want to take one upstream should re-check
+the claim against current `main` first, since cognee moves quickly; the ledger
+is what makes that cheap.

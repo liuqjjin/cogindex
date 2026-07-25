@@ -1,7 +1,7 @@
 # Proposal: accept caller-provided `data_id` in the REST add endpoint
 
 **Target:** cognee (audited at `90b4acaa`, applies to released 1.4.0)
-**Status:** draft (not yet filed upstream)
+**Status:** analysis, not filed upstream (see README in this directory)
 
 ## Problem
 
