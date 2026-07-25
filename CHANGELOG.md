@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-24
+## [0.1.0] - 2026-07-25
+
+First release. Nothing to compare against, so this describes what the package
+does rather than what changed.
 
 ### Added
 
@@ -30,13 +33,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Locking: in-process provider and PostgreSQL advisory-lock provider
   (`cogindex[postgres]`), correctness independent of either (ADR-0006).
 - Drift verification (`verify_dataset`) and environment checks (`doctor`).
-- Test suite: unit matrix + identity goldens, Hypothesis convergence state
-  machine over an emulated engine-tracking contract (mutation-validated),
-  9-scenario deterministic fault matrix, real-local-Cognee integration tier
-  with deterministic LLM/embedding substitutes, opt-in real-LLM tier,
-  PostgreSQL lock tier.
-- Six-category benchmark harness with environment-fingerprinted JSON/MD
-  reports (fake and real modes).
+- Test suite: unit matrix and identity goldens, a Hypothesis convergence state
+  machine over an emulated engine-tracking contract (mutation-validated), an
+  11-scenario deterministic fault matrix, a real-local-Cognee integration tier
+  with deterministic LLM and embedding substitutes, an opt-in real-LLM tier,
+  and a PostgreSQL lock tier. `tests/unit/test_compat.py` pins the upstream
+  surface so an incompatible cognee release fails in CI rather than at
+  runtime. 87% coverage across the tiers that need no external services.
+- Seven-category benchmark harness with environment-fingerprinted reports,
+  including a comparison against a hand-rolled Cognee integration that
+  quantifies the superseded rows and stale graph entities cogindex avoids.
+  Results and reproduction commands in `docs/benchmarks.md`.
+
+### Performance
+
+- A batch of derivative purges shares one Cognee dataset context instead of
+  opening one per document. Cognee shuts its graph worker down when that
+  context closes, on a thread join that measured 1.149s of a 1.183s
+  `forget()` call, so the old behaviour made replacing two documents cost more
+  than ingesting six. Five documents went from 13.6s to 3.1s, and the
+  real-stack incremental-to-full ratio from 2.202 to 0.859. Running those
+  deletions concurrently is faster still and leaves an orphaned graph node
+  behind, so the loop stays sequential.
 - Runnable examples: folder → knowledge graph quickstart (one-shot and
   live watch) and a shared-entity provenance demo; both run without
   credentials in deterministic mode.

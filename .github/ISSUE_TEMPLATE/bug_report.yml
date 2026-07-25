@@ -1,0 +1,77 @@
+name: Bug report
+description: Something behaves differently from what the docs or ADRs promise
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two things make a report about this connector actionable, and both are
+        easy to leave out: which tier the problem is in (reconcile decision,
+        sink execution, or Cognee itself), and whether a re-run fixes it.
+        `verify_dataset` and `doctor` answer most of that.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the divergence, not only the symptom. What state is
+        Cognee in, and what should it be in?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Smallest sequence of syncs that shows it. Document contents
+        can be replaced with placeholders, but keep the shape (how many
+        documents, which ones changed between syncs).
+      placeholder: |
+        1. declare a.md and b.md, sync
+        2. edit a.md, sync
+        3. verify_dataset reports ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: converges
+    attributes:
+      label: Does another sync fix it?
+      description: |
+        cogindex promises convergence, not atomicity, so a state that repairs
+        itself on the next successful sync is expected behaviour during a
+        failure window and a bug otherwise. If it never converges, say how many
+        syncs you tried.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of cogindex.doctor()
+      description: |
+        `python -c "import cogindex; print(cogindex.doctor().render())"`.
+        It reports versions, storage roots and credential state; none of it is
+        secret.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: cogindex, cocoindex and cognee versions
+      placeholder: cogindex 0.1.0, cocoindex 1.0.18, cognee 1.4.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Which runtime
+      options:
+        - LocalCogneeRuntime
+        - FakeCogneeRuntime (tests)
+        - a custom CogneeRuntime implementation
+    validations:
+      required: true

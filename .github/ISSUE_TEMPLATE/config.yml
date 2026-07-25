@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Upstream Cognee issue
+    url: https://github.com/topoteretes/cognee/issues
+    about: Ingestion, cognify, retrieval or graph behaviour. cogindex drives
+      Cognee's public API and does not patch it.
+  - name: Upstream CocoIndex issue
+    url: https://github.com/cocoindex-io/cocoindex/issues
+    about: Target-state engine, change detection or the tracking store.
+  - name: Security vulnerability
+    url: https://github.com/liuqjjin/cogindex/security/advisories/new
+    about: Report privately instead of opening an issue. See SECURITY.md.

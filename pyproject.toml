@@ -28,8 +28,10 @@ dependencies = [
 postgres = ["asyncpg>=0.31"]
 
 [project.urls]
-Repository = "https://github.com/cogindex/cogindex"
-Changelog = "https://github.com/cogindex/cogindex/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/liuqjjin/cogindex"
+Repository = "https://github.com/liuqjjin/cogindex"
+Changelog = "https://github.com/liuqjjin/cogindex/blob/main/CHANGELOG.md"
+Issues = "https://github.com/liuqjjin/cogindex/issues"
 
 [dependency-groups]
 dev = [

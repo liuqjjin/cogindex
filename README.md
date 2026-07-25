@@ -1,14 +1,46 @@
 # cogindex
 
-Reliable, incremental materialization of
-[CocoIndex](https://github.com/cocoindex-io/cocoindex)-managed documents into
-[Cognee](https://github.com/topoteretes/cognee) knowledge graphs.
+[![CI](https://github.com/liuqjjin/cogindex/actions/workflows/ci.yml/badge.svg)](https://github.com/liuqjjin/cogindex/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/cogindex)](https://pypi.org/project/cogindex/)
+[![Python](https://img.shields.io/pypi/pyversions/cogindex)](https://pypi.org/project/cogindex/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-You declare *what* documents should exist in a Cognee dataset; the CocoIndex
-engine detects what changed; cogindex turns the difference into idempotent
-Cognee operations — batched adds under stable identities, in-place
-replacement, provenance-respecting deletion, one incremental cognify per
-changed batch — and converges to the declared state even across crashes.
+Keep a [Cognee](https://github.com/topoteretes/cognee) knowledge graph in sync
+with a changing set of documents, using
+[CocoIndex](https://github.com/cocoindex-io/cocoindex) to decide what changed.
+
+## The problem
+
+Wiring Cognee into a pipeline looks like four lines, and they work:
+
+```python
+for text in documents:
+    await cognee.add(text, dataset_name="docs")
+await cognee.cognify(datasets=[dataset_id])
+```
+
+They keep working right up until a document changes. `add()` derives a
+document's id from a hash of its content, so an edited document is a *new*
+document: the new text lands, the old row stays, and both versions' entities
+sit in the graph with equal standing. Retrieval cannot tell them apart. Delete
+a source file and nothing happens at all, because nothing ever recorded which
+row it became.
+
+Here is what that costs, measured on a real local Cognee stack over six
+documents with two edits and one deletion
+([how to reproduce](docs/benchmarks.md)):
+
+| after three syncs | the four lines above | cogindex | correct |
+|---|---|---|---|
+| documents in Cognee | 9 | **5** | 5 |
+| stale entities in the graph | 4 | **0** | 0 |
+| documents removed on delete | 0 | **1** | 1 |
+| wall clock | 31.9s | 20.4s | |
+
+cogindex is also the faster of the two, because re-extracting superseded
+content is work that it skips.
+
+## Usage
 
 ```python
 import cocoindex as coco
@@ -24,78 +56,105 @@ async def app_main(docs: dict[str, str]) -> None:
         target.declare_document(key, content)
 ```
 
-Run it again with changed content: only the changed documents are purged,
-re-added and re-cognified. Remove a key: the document and its exclusive
-graph derivatives are deleted, while entities still supported by other
-documents survive (Cognee's provenance planner decides; cogindex feeds it
-correct identities). See [`examples/`](examples/) for a runnable folder →
-knowledge-graph quickstart and a shared-entity provenance demo — both work
-without any LLM key in deterministic mode.
+You declare what should exist. Run it again with changed content and only the
+changed documents are purged, re-added and re-cognified. Drop a key and the
+document goes, along with the graph derivatives nothing else supports; entities
+still cited by another document survive, because deletion runs through Cognee's
+provenance planner rather than around it.
 
-## The problems this connector actually solves
+Try it on a folder, with no API key:
 
-Wiring `cognee.add()` into a pipeline is easy. Making the result *converge*
-is not — these are the six problems cogindex exists for, each with a
-decision record:
+```bash
+pip install cogindex
+python examples/quickstart_live.py ./my-docs --deterministic
+```
+
+See [`examples/`](examples/) for that quickstart and a shared-entity provenance
+demo.
+
+## Work scales with the change set
+
+Twenty-four documents on the real stack, changing six:
+
+| | extraction calls | seconds |
+|---|---|---|
+| first sync | 49 | 9.22 |
+| re-run, nothing changed | **0** | **0.02** |
+| change 6 of 24 | **12** | 7.92 |
+
+Extraction calls are the number that transfers to your deployment; the
+benchmarks stub the LLM, so their wall clock measures database overhead rather
+than the thing that dominates a real run. Full numbers, the machine they came
+from, and a warning about which column not to trust:
+[docs/benchmarks.md](docs/benchmarks.md).
+
+## How it works
+
+Six problems, each with a decision record:
 
 | Problem | Mechanism | ADR |
 |---|---|---|
-| **Stable identity** | `data_id = uuid5(namespace, runtime ⧺ tenant ⧺ dataset ⧺ key)` — logical coordinates only, never content, injectively encoded | [0002](docs/adr/0002-stable-document-identity.md) |
+| **Stable identity** | `data_id = uuid5(namespace, runtime ⧺ tenant ⧺ dataset ⧺ key)`, over logical coordinates only, never content, injectively encoded | [0002](docs/adr/0002-stable-document-identity.md) |
 | **Idempotent writes** | every operation is a safe ensure: re-add converges, deleting the missing succeeds | [0003](docs/adr/0003-consistency-model.md) |
-| **Content replacement** | purge derivatives → re-add same `data_id` → cognify; without the purge, Cognee keeps orphaned graph/vector derivatives (audited, and emulated in the test fake) | [0004](docs/adr/0004-replace-delete-protocol.md) |
-| **Config invalidation** | processing fingerprint per document + lossy child invalidation at the dataset level; Cognee's own incremental gate never checks configuration | [0005](docs/adr/0005-configuration-invalidation.md) |
-| **Deletion & ownership** | `managed_by="system"` datasets tear down on unmount; deletion always flows through Cognee's provenance planner | [0004](docs/adr/0004-replace-delete-protocol.md) |
-| **Convergence after failure** | CocoIndex's precommit/commit tracking + conservative reconciliation over *possible* previous states; any successful sync reaches the declared state | [0003](docs/adr/0003-consistency-model.md) |
+| **Content replacement** | purge derivatives, re-add the same `data_id`, cognify. Without the purge Cognee keeps the old content's graph and vectors | [0004](docs/adr/0004-replace-delete-protocol.md) |
+| **Config invalidation** | a processing fingerprint per document, plus lossy invalidation at the dataset level. Cognee's own incremental gate never looks at configuration | [0005](docs/adr/0005-configuration-invalidation.md) |
+| **Deletion and ownership** | `managed_by="system"` datasets tear down on unmount; deletion always flows through Cognee's provenance planner | [0004](docs/adr/0004-replace-delete-protocol.md) |
+| **Convergence after failure** | CocoIndex's precommit/commit tracking, reconciled conservatively over *possible* previous states | [0003](docs/adr/0003-consistency-model.md) |
 
-## What is honestly guaranteed (and what is not)
+The interesting one is the last. cogindex is a CocoIndex target connector
+rather than a memoized function, because memoization knows whether it already
+ran but nothing about the external state it produced: it cannot delete, cannot
+replace, and cannot tell a crashed write from a completed one
+([ADR-0001](docs/adr/0001-cocoindex-target-not-memoized-function.md)).
 
-**Guaranteed** (and tested): at-least-once application of idempotent
-operations with eventual convergence — after any sequence of crashes at any
-phase of the write protocol, the next successful sync leaves Cognee holding
-exactly the declared documents with fresh derivatives, and reconciliation
-reaches a fixed point.
+## What is guaranteed, and what is not
 
-**Not guaranteed**: cross-system atomicity. CocoIndex's tracking store and
-Cognee's three databases cannot be updated in one transaction; between a
-crash and the next sync, readers can observe stale or partially-applied
-state. The consistency model documents every anomaly window instead of
-pretending they don't exist: [ADR-0003](docs/adr/0003-consistency-model.md).
+**Guaranteed, and tested:** at-least-once application of idempotent operations
+with eventual convergence. After a crash at any phase of the write protocol,
+the next successful sync leaves Cognee holding exactly the declared documents
+with fresh derivatives, and reconciliation reaches a fixed point.
 
-Known limitations (upstream-constrained, documented not papered over):
+**Not guaranteed:** cross-system atomicity. CocoIndex's tracking store and
+Cognee's three databases cannot be updated in one transaction, so between a
+crash and the next sync a reader can observe partially applied state.
+[ADR-0003](docs/adr/0003-consistency-model.md) enumerates every anomaly window
+rather than pretending they do not exist.
 
-- Emptying a dataset on unmount leaves the (empty) dataset row — Cognee has
-  no public dataset-row delete API.
+Known limits, upstream-constrained:
+
 - Cognee must run in-process. There is no REST-backed runtime, because
-  Cognee's REST add accepts no `data_id` and stable identity is the
-  foundation of everything else here
-  ([proposal](docs/upstream-proposals/0002-cognee-rest-add-data-id.md),
-  [ADR-0007](docs/adr/0007-runtime-abstraction.md)).
-- `verify_dataset` compares presence/identity/completion/label, not raw
-  content or metadata (Cognee stores those in storage-specific envelopes).
-- Unmounting a `managed_by="user"` dataset leaves *everything* in it,
-  including documents cogindex added (engine-verified semantics, see
-  ADR-0004).
+  Cognee's REST `add` accepts no `data_id`
+  ([proposal](docs/upstream-proposals/0002-cognee-rest-add-data-id.md)).
+- Emptying a dataset on unmount leaves the empty dataset row behind; upstream
+  has no public delete for it.
+- `managed_by="user"` means cogindex never destroys anything in that dataset,
+  not that it removes only what it added.
+- `verify_dataset` compares presence, identity, cognify completion and label.
+  Not raw content, and not whether derivatives match current content.
 
-## How correctness is tested
+## How correctness is established
 
 | Tier | What runs | Command |
 |---|---|---|
-| unit | reconcile decision matrix, identity goldens, 11-scenario deterministic fault matrix, lock serialization, false-success guards, compatibility surface — no services | `make test` |
-| property | Hypothesis state machine: random interleavings of declare/remove/config-change/sync/crash against an emulation of the engine's precommit→apply→commit contract. Mutation-validated: no-op the derivative purge, or misclassify a replace as metadata-only, and it fails. Removing the dataset lock does *not* fail this tier (correctness never depended on the lock); that regression is caught by the unit fault matrix instead | `make test-property` |
-| integration | **real local Cognee** (SQLite + LanceDB + embedded graph) with deterministic LLM/embedding substitutes — replace protocol and shared-entity provenance asserted at the graph level; the incremental gate proven by LLM call counts | `make test-integration` |
-| integration_llm | opt-in, real LLM end to end (`COGINDEX_RUN_LLM_TESTS=1` + key) | `make test-llm` |
-| postgres | advisory-lock semantics incl. crash-release, against a real PostgreSQL (CI service container or Docker) | `make test-postgres` |
+| unit | reconcile decision matrix, identity goldens, an 11-scenario fault matrix, lock serialization, the upstream compatibility surface | `make test` |
+| property | a Hypothesis state machine over random interleavings of declare, remove, config change, sync and crash. Mutation-validated: no-op the derivative purge and it fails | `make test-property` |
+| integration | **real local Cognee** (SQLite, LanceDB, embedded graph) with deterministic LLM and embedding substitutes. Replace protocol and shared-entity provenance asserted at the graph level | `make test-integration` |
+| postgres | advisory-lock semantics including crash release, against a real PostgreSQL | `make test-postgres` |
+| llm | opt-in, real provider end to end | `make test-llm` |
 
-Fake-runtime tests are never presented as integration tests; the in-memory
-fake deliberately reproduces Cognee's hazards (orphaned derivatives on
-re-add, completion-only cognify gate) so tests fail if the protocol stops
-compensating for them.
+Coverage across the tiers that need no external services is 87%.
 
-The integration tier has already paid for itself: it caught that
-`cognee.add()`'s per-item skip gate (on by default via `data_cache` /
-`incremental_loading`) silently swallows replacement content — a behavior
-the source audit missed. See
-[the corrected finding](docs/upstream-audit/cognee/findings.md).
+Fake-runtime tests are never presented as integration tests. The in-memory fake
+deliberately reproduces Cognee's hazards, including orphaned derivatives on
+re-add and a completion-only cognify gate, so the tests fail if the protocol
+stops compensating for them.
+
+The integration tier has already earned its runtime twice. It found that
+`cognee.add()`'s per-item skip gate silently swallows replacement content under
+its own defaults, which the source audit had missed
+([the corrected finding](docs/upstream-audit/cognee/findings.md)), and it is
+where the per-document graph-worker teardown that made incremental updates
+slower than full rebuilds showed up as a number.
 
 ## Operations
 
@@ -106,61 +165,41 @@ print(report.render())  # missing / unexpected / incomplete / label drift
 print(cogindex.doctor().render())  # versions, capabilities, storage roots, credentials
 ```
 
-Re-running the flow is the repair; `verify_dataset` only detects.
+`verify_dataset` only detects; re-running the flow is the repair, which
+ADR-0003's convergence property is what makes safe.
 
-Concurrency: batch application per dataset is serialized by a
-`LockProvider` — in-process by default, PostgreSQL advisory locks
-(`cogindex[postgres]`) for multi-process updaters. Correctness never
-depends on the lock; it prevents wasted duplicate work
-([ADR-0006](docs/adr/0006-concurrency-and-locking.md)).
+Batch application per dataset is serialized by a `LockProvider`: in-process by
+default, PostgreSQL advisory locks (`cogindex[postgres]`) for multi-process
+updaters. Correctness never depends on the lock, which the property suite
+demonstrates by still passing without it; the lock exists to avoid duplicated
+work ([ADR-0006](docs/adr/0006-concurrency-and-locking.md)).
 
-## Benchmarks
+## Compatibility
 
-```bash
-python -m benchmarks.run --profile default          # connector layer (in-memory fake)
-python -m benchmarks.run --profile smoke --mode real  # real local stack, deterministic substitutes
-```
+Python 3.11 to 3.13, on Linux and macOS. `cocoindex >=1.0.18,<2`,
+`cognee >=1.4.0,<1.5`.
 
-Categories: baseline comparison against a naive integration, initial ingest,
-incremental update, freshness percentiles, deletion correctness, crash
-recovery, verification reads. Reports land in the gitignored
-`benchmarks/reports/` as JSON and Markdown with a full environment
-fingerprint.
-
-See [docs/benchmarks.md](docs/benchmarks.md) for results, the machine they
-were measured on, and what each number does and does not mean.
-
-## Install & compatibility
-
-```bash
-pip install cogindex            # not yet published; from source: pip install .
-```
-
-Python 3.11 to 3.13, tested on Linux and macOS. Pinned upstream ranges:
-`cocoindex >=1.0.18,<2`, `cognee >=1.4.0,<1.5`. The audited upstream commits are locked in
-[`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json); every first-party upstream file
-carries an explicit review status in the
-[audit ledger](docs/upstream-audit/) (machine-checked by
-`docs/upstream-audit/tools/check_coverage.py`). Four upstream improvement
-proposals derived from the audit live in
+Both upstreams were audited at pinned commits recorded in
+[`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json). Every first-party upstream file
+carries an explicit review status in the [audit ledger](docs/upstream-audit/),
+machine-checked in CI, and the four gaps that audit turned up are written up in
 [docs/upstream-proposals/](docs/upstream-proposals/).
 
-## Project layout
+## Layout
 
 ```
-src/cogindex/          the connector (public API re-exported in __init__)
-docs/adr/              seven decision records — start with 0003 and 0004
-docs/upstream-audit/   full-repo audit ledger for both upstreams
-docs/upstream-proposals/
+src/cogindex/          the connector; public API re-exported in __init__
+docs/adr/              seven decision records, start with 0003 and 0004
+docs/upstream-audit/   full-repository audit ledger for both upstreams
+docs/benchmarks.md     results, machine, reproduction commands
 tests/{unit,property,integration}
-benchmarks/            six-category benchmark harness
-examples/              runnable demos (deterministic mode needs no keys)
+benchmarks/            seven-category harness
+examples/              runnable demos, no credentials needed
 ```
 
-Development: `make setup && make ci` (exactly what required CI runs). See
-[CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+Development: `make setup && make ci`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Apache-2.0. Not affiliated with the CocoIndex or Cognee projects; both are
-used under their Apache-2.0 licenses (see [ATTRIBUTION.md](ATTRIBUTION.md)).
+Apache-2.0. Not affiliated with the CocoIndex or Cognee projects; both are used
+under their Apache-2.0 licenses ([ATTRIBUTION.md](ATTRIBUTION.md)).

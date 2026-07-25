@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a capability cogindex should have
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: a fair number of missing capabilities
+        are blocked upstream rather than unimplemented here, and those live in
+        `docs/upstream-proposals/` instead. Writing to a served Cognee over
+        REST is the main one.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The pipeline or workflow, not the API you have in mind. The
+        best feature requests here have led to a different design than the one
+        originally proposed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do today instead
+      description: Including "nothing, I gave up". If you built something on
+        top of cogindex to work around this, that shape is useful to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: consistency
+    attributes:
+      label: How should it behave when a sync fails halfway through
+      description: |
+        Not a formality. Every write path here has to be idempotent and
+        convergent under an interrupted sync (ADR-0003), and that constraint
+        has ruled out otherwise reasonable features. A rough answer is fine.
+    validations:
+      required: false

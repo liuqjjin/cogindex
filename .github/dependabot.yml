@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+
+  # cocoindex and cognee are pinned to audited ranges and are bumped by hand,
+  # because a bump means re-running the audit ledger and the integration tier
+  # (see CONTRIBUTING). Dependabot handles the dev toolchain only.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore"
+    ignore:
+      - dependency-name: cocoindex
+      - dependency-name: cognee
