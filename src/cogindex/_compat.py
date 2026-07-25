@@ -9,13 +9,16 @@ lazily on first use: importing cognee initializes its logging/telemetry, and
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import importlib
 import importlib.metadata
 import inspect
+import uuid
 import warnings
 from collections.abc import Mapping
+from contextlib import AbstractAsyncContextManager
 from types import ModuleType
 from typing import Any
 
@@ -28,6 +31,8 @@ __all__ = [
     "configure_storage",
     "configured_models",
     "credentials_present",
+    "dataset_database_context",
+    "default_user_id",
     "ensure_databases_ready",
     "load",
     "storage_roots",
@@ -175,6 +180,46 @@ def configured_models() -> tuple[str | None, str | None, int | None]:
         embedding_model = None
         embedding_dimensions = None
     return llm_model, embedding_model, embedding_dimensions
+
+
+def dataset_database_context(
+    dataset_id: uuid.UUID, user_id: uuid.UUID | None
+) -> AbstractAsyncContextManager[Any]:
+    """Bind cognee's per-dataset database context for the duration of a block.
+
+    A pure optimisation with a large payoff. Cognee scopes its graph and vector
+    engines per dataset, and every public call that needs them opens this
+    context and closes it again on the way out. Closing it shuts down the graph
+    worker, which blocks on a thread join: measured at roughly 2.7 s, against
+    about 0.07 s of actual work for a single-document ``forget``. Deleting a
+    batch of documents therefore pays that teardown once per document unless
+    something holds the context open across the whole batch, which is what this
+    is for. Nesting is what makes it work: the inner contexts cognee opens for
+    itself become no-ops while an outer one is live.
+
+    Returns a null context when the module has moved, so the caller degrades to
+    the slower behaviour rather than failing.
+    """
+    if user_id is None:
+        return contextlib.nullcontext()
+    try:
+        module = importlib.import_module("cognee.context_global_variables")
+        set_context = module.set_database_global_context_variables
+    except (ImportError, AttributeError):
+        return contextlib.nullcontext()
+    context: AbstractAsyncContextManager[Any] = set_context(dataset_id, user_id)
+    return context
+
+
+async def default_user_id() -> uuid.UUID | None:
+    """The id of the user cognee acts as when none was configured."""
+    try:
+        module = importlib.import_module("cognee.modules.users.methods")
+        user = await module.get_default_user()
+    except (ImportError, AttributeError):
+        return None
+    user_id = getattr(user, "id", None)
+    return user_id if isinstance(user_id, uuid.UUID) else None
 
 
 async def ensure_databases_ready() -> None:

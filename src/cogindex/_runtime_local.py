@@ -43,7 +43,7 @@ class LocalCogneeRuntime:
     an access-control mechanism: this runtime acts as one cognee user.
     """
 
-    __slots__ = ("_lock_provider", "_setup_done", "_user")
+    __slots__ = ("_default_user_id", "_lock_provider", "_setup_done", "_user")
 
     def __init__(
         self,
@@ -63,6 +63,7 @@ class LocalCogneeRuntime:
         self._lock_provider: LockProvider = lock_provider or InProcessLockProvider()
         self._user = user
         self._setup_done = False
+        self._default_user_id: uuid.UUID | None = None
 
     async def _ensure_ready(self) -> None:
         """Lazily create cognee's database structures (idempotent)."""
@@ -231,28 +232,49 @@ class LocalCogneeRuntime:
             *compat_info.dataset_missing_errors,
             ValueError,
         )
-        for data_id in data_ids:
-            try:
-                await compat_info.cognee.forget(
-                    data_id=data_id,
-                    dataset_id=handle.dataset_id,
-                    memory_only=memory_only,
-                    user=self._user,
-                )
-            except already_absent_errors as exc:
-                # forget() on a missing data_id in an existing dataset already
-                # succeeds upstream; what can raise is the dataset vanishing
-                # concurrently — upstream signals that as DatasetNotFound /
-                # UnauthorizedDataAccess, or a bare ValueError from its
-                # dataset-id resolution. All mean "already gone": success for
-                # an idempotent delete (ADR-0004), logged for observability.
-                logger.warning(
-                    "forget(memory_only=%s) data_id=%s dataset=%s treated as already-absent: %s",
-                    memory_only,
-                    data_id,
-                    handle.name,
-                    exc,
-                )
+        # One dataset-database context around the whole batch. cognee opens one
+        # per forget() otherwise, and closing it tears down the graph worker on
+        # a blocking thread join that dominates the call (see
+        # _compat.dataset_database_context). Sequentially, inside one context,
+        # is deliberate: running these concurrently is measurably faster and
+        # measurably wrong, because the provenance planner's shared-node
+        # cleanup races and leaves orphaned type nodes behind.
+        async with _compat.dataset_database_context(
+            handle.dataset_id, await self._resolve_user_id()
+        ):
+            for data_id in data_ids:
+                try:
+                    await compat_info.cognee.forget(
+                        data_id=data_id,
+                        dataset_id=handle.dataset_id,
+                        memory_only=memory_only,
+                        user=self._user,
+                    )
+                except already_absent_errors as exc:
+                    # forget() on a missing data_id in an existing dataset
+                    # already succeeds upstream. What can raise is the dataset
+                    # vanishing concurrently, which upstream signals as
+                    # DatasetNotFound / UnauthorizedDataAccess, or as a bare
+                    # ValueError out of its dataset-id resolution. All three
+                    # mean "already gone", which an idempotent delete treats as
+                    # success (ADR-0004), logged for observability.
+                    logger.warning(
+                        "forget(memory_only=%s) data_id=%s dataset=%s treated as "
+                        "already-absent: %s",
+                        memory_only,
+                        data_id,
+                        handle.name,
+                        exc,
+                    )
+
+    async def _resolve_user_id(self) -> uuid.UUID | None:
+        """Id of the acting user, resolved once and cached."""
+        if self._user is not None:
+            user_id = getattr(self._user, "id", None)
+            return user_id if isinstance(user_id, uuid.UUID) else None
+        if self._default_user_id is None:
+            self._default_user_id = await _compat.default_user_id()
+        return self._default_user_id
 
     async def _ensure_resolved(self, handle: DatasetHandle) -> DatasetHandle:
         if handle.dataset_id is not None:

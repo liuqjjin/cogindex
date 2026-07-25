@@ -192,6 +192,65 @@ async def test_lifecycle_replace_and_shared_entity_provenance(
     await runtime.purge_document_memory(handle, [id_carol])
 
 
+async def test_batch_purge_opens_one_database_context_for_the_whole_batch(
+    runtime: LocalCogneeRuntime, llm_mock: AsyncMock
+) -> None:
+    """Purge cost stays flat in the size of the change set.
+
+    Cognee scopes its graph engine per dataset and shuts the graph worker down
+    when that scope closes, on a blocking thread join measured at roughly 2.7 s
+    against about 0.07 s of real deletion work. A naive loop pays that per
+    document, which is how replacing two documents came to cost more than
+    ingesting six. Holding one context around the batch collapses it to a
+    single teardown.
+
+    Asserted structurally rather than as a wall-clock threshold: a timing bound
+    would be flaky on shared CI hardware, while the call counts are exactly the
+    property that matters and fail loudly if the loop is ever restructured.
+    """
+    import cogindex._compat as compat_module
+
+    dataset = "int_batch_purge"
+    ids = [did(dataset, f"doc-{i}.md") for i in range(5)]
+    handle = await runtime.add_documents(
+        DatasetHandle(name=dataset, tenant=TENANT),
+        [
+            DocumentPayload(data_id=data_id, content=f"Bob works for AlphaCorp, note {i}.")
+            for i, data_id in enumerate(ids)
+        ],
+    )
+    await runtime.cognify_dataset(handle, CognifyProfile())
+
+    contexts_opened = 0
+    forgets_issued = 0
+    real_context = compat_module.dataset_database_context
+    real_forget = compat_module.load().cognee.forget
+
+    def counting_context(dataset_id: uuid.UUID, user_id: uuid.UUID | None) -> Any:
+        nonlocal contexts_opened
+        contexts_opened += 1
+        return real_context(dataset_id, user_id)
+
+    async def counting_forget(**kwargs: Any) -> Any:
+        nonlocal forgets_issued
+        forgets_issued += 1
+        return await real_forget(**kwargs)
+
+    with (
+        patch.object(compat_module, "dataset_database_context", counting_context),
+        patch.object(compat_module.load().cognee, "forget", counting_forget),
+    ):
+        await runtime.purge_document_memory(handle, ids)
+
+    assert forgets_issued == len(ids), "one forget per document is the unit of deletion"
+    assert contexts_opened == 1, (
+        f"opened {contexts_opened} database contexts for {len(ids)} documents; "
+        "the batch must share one or the graph-worker teardown is paid per document"
+    )
+    # The purge itself still worked: everything is back to un-cognified.
+    assert all(not stored.cognify_complete for stored in await runtime.list_documents(handle))
+
+
 async def test_metadata_only_readd_upserts_in_place_and_keeps_derivatives(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
