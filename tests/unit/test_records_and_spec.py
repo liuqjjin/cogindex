@@ -18,7 +18,13 @@ from cocoindex.connectorkits.statediff import MutualTrackingRecord
 from cocoindex.connectorkits.target import ManagedBy
 
 from cogindex._records import RECORD_SCHEMA_VERSION, DatasetConfigRecord, DocumentRecord
-from cogindex._spec import CogneeDocumentSpec, ProcessingConfig, document_record_for
+from cogindex._spec import (
+    CogneeDocumentSpec,
+    CognifyProfile,
+    ProcessingConfig,
+    document_record_for,
+    processing_config_from_profile,
+)
 
 # ---------------------------------------------------------------------------
 # Contract 1: msgspec.json roundtrip preserves equality
@@ -231,7 +237,92 @@ def test_single_field_change_changes_processing_fingerprint(
 
 
 # ---------------------------------------------------------------------------
-# Contract 4: document_record_for
+# Contract 4: processing_config_from_profile resolves effective defaults
+# ---------------------------------------------------------------------------
+
+
+def test_derived_config_resolves_cognee_defaults_for_unset_fields() -> None:
+    # An all-None profile must not fingerprint as all-None: the point is to
+    # record what cognify would actually do, so that a cognee upgrade which
+    # moves a default registers as a config change.
+    derived = processing_config_from_profile(CognifyProfile())
+    assert derived.graph_model_id is not None
+    assert derived.chunker_id is not None
+    assert derived.llm_model
+    assert derived.embedding_model
+    # A schema fingerprint means the graph model's shape is covered too, not
+    # only its name.
+    assert derived.graph_model_schema_fingerprint
+
+
+def test_derived_config_prefers_explicit_profile_values_over_defaults() -> None:
+    default_chunk_size = processing_config_from_profile(CognifyProfile()).chunk_size
+    explicit = processing_config_from_profile(CognifyProfile(chunk_size=17))
+    assert explicit.chunk_size == 17
+    assert explicit.chunk_size != default_chunk_size
+
+
+def test_custom_prompt_is_fingerprinted_not_stored() -> None:
+    # The prompt itself may be long and is not needed for change detection; a
+    # fingerprint is enough and keeps the tracking record small.
+    prompt = "extract only organizations"
+    derived = processing_config_from_profile(CognifyProfile(custom_prompt=prompt))
+    assert derived.custom_prompt_fingerprint
+    assert prompt not in str(dataclasses.asdict(derived))
+    other = processing_config_from_profile(CognifyProfile(custom_prompt=prompt + "!"))
+    assert other.custom_prompt_fingerprint != derived.custom_prompt_fingerprint
+
+
+def test_excluding_runtime_models_drops_only_the_environment_derived_fields() -> None:
+    # The documented escape hatch for reproducing identical fingerprints across
+    # machines whose model configuration differs.
+    with_models = processing_config_from_profile(CognifyProfile())
+    without = processing_config_from_profile(CognifyProfile(), include_runtime_models=False)
+    assert (without.llm_model, without.embedding_model, without.embedding_dimensions) == (
+        None,
+        None,
+        None,
+    )
+    assert without.graph_model_id == with_models.graph_model_id
+    assert without.chunker_id == with_models.chunker_id
+    assert without.fingerprint() != with_models.fingerprint()
+
+
+def test_graph_model_schema_fingerprint_tracks_structure_not_name() -> None:
+    import msgspec as _msgspec  # noqa: F401  (kept local; pydantic is the shape under test)
+    import pydantic
+
+    class Shape(pydantic.BaseModel):
+        name: str
+
+    class SameNameDifferentShape(pydantic.BaseModel):
+        name: str
+        weight: float
+
+    # Deliberately give both models the same qualified name, which is what
+    # happens when someone edits a graph model in place.
+    SameNameDifferentShape.__qualname__ = Shape.__qualname__
+    SameNameDifferentShape.__module__ = Shape.__module__
+
+    first = processing_config_from_profile(CognifyProfile(graph_model=Shape))
+    second = processing_config_from_profile(CognifyProfile(graph_model=SameNameDifferentShape))
+    assert first.graph_model_id == second.graph_model_id
+    assert first.graph_model_schema_fingerprint != second.graph_model_schema_fingerprint
+    assert first.fingerprint() != second.fingerprint()
+
+
+def test_graph_model_without_a_json_schema_degrades_to_name_only() -> None:
+    class NotAPydanticModel:
+        pass
+
+    derived = processing_config_from_profile(CognifyProfile(graph_model=NotAPydanticModel))
+    assert derived.graph_model_id is not None
+    # No schema derivable, so the qualified name is the coarser fallback signal.
+    assert derived.graph_model_schema_fingerprint is None
+
+
+# ---------------------------------------------------------------------------
+# Contract 5: document_record_for
 # ---------------------------------------------------------------------------
 
 

@@ -192,6 +192,59 @@ async def test_lifecycle_replace_and_shared_entity_provenance(
     await runtime.purge_document_memory(handle, [id_carol])
 
 
+async def test_metadata_only_readd_upserts_in_place_and_keeps_derivatives(
+    runtime: LocalCogneeRuntime, llm_mock: AsyncMock
+) -> None:
+    """The upstream assumption behind the update_metadata write op.
+
+    ADR-0005 routes a label or external-metadata change to a bare re-add: no
+    derivative purge, no cognify. That is only safe if re-adding identical
+    content leaves the item's pipeline status COMPLETED, so the subsequent
+    cognify (whenever one next runs for another reason) still skips it, and if
+    the metadata actually lands. Both halves were previously asserted only
+    against the in-memory fake, which is circular: the fake was written from
+    the same reading of upstream that the claim rests on.
+    """
+    dataset = "int_metadata"
+    data_id = did(dataset, "doc.md")
+    content = "Bob works for AlphaCorp."
+    handle = await runtime.add_documents(
+        DatasetHandle(name=dataset, tenant=TENANT),
+        [DocumentPayload(data_id=data_id, content=content, label="first")],
+    )
+    await runtime.cognify_dataset(handle, CognifyProfile())
+    assert handle.dataset_id is not None
+    entities_before = await graph_node_names(handle.dataset_id)
+    calls_after_cognify = llm_mock.call_count
+    assert calls_after_cognify > 0
+
+    await runtime.add_documents(
+        handle,
+        [
+            DocumentPayload(
+                data_id=data_id,
+                content=content,
+                label="second",
+                external_metadata={"revision": 2},
+            )
+        ],
+    )
+
+    (stored,) = await runtime.list_documents(handle)
+    assert stored.data_id == data_id
+    assert stored.label == "second"
+    # Status survived, so cognify's gate will keep skipping this item.
+    assert stored.cognify_complete is True
+    # Nothing was re-extracted: same content means no LLM work, which is the
+    # entire reason metadata changes take the cheap path.
+    assert llm_mock.call_count == calls_after_cognify
+    assert await graph_node_names(handle.dataset_id) == entities_before
+
+    # A cognify triggered by unrelated work must still skip this document.
+    await runtime.cognify_dataset(handle, CognifyProfile())
+    assert llm_mock.call_count == calls_after_cognify
+
+
 async def test_incremental_cognify_skips_completed_items(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
