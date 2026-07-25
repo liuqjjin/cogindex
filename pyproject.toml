@@ -40,7 +40,7 @@ dev = [
     "hypothesis>=6.130",
     "mypy>=1.16",
     "ruff>=0.12",
-    "coverage[toml]>=7.6",
+    "coverage[toml]>=7.15.2",
     "testcontainers[postgres]>=4.9",
     "pip-audit>=2.7",
 ]
