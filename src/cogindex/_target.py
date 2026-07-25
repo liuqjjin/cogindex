@@ -84,10 +84,21 @@ def _classify_write(
     "update_metadata" (re-add without purging derivatives) is only safe when
     every possible previous record matches the desired record on all
     derivative-affecting fields AND no record may be missing — a missing
-    record could mean the last cognify never completed, so the ensure path
-    (upsert: add + cognify) must run instead.
+    record could mean the last cognify never completed, or that a torn delete
+    took the derivatives, so the full replace sequence must run instead.
     """
     if diff_action in ("insert", "upsert"):
+        # Uncertain previous state over a document Cognee may already hold is
+        # ADR-0004's Replace trigger, not a create: a torn hard delete drops
+        # graph/vector derivatives before the relational row that carries the
+        # COMPLETED cognify status, so add+cognify alone would commit a
+        # tracking record for a document with no derivatives and never
+        # revisit it. The extra purge is idempotent and a no-op when the
+        # state is intact. Empty prev_records keeps the create path: nothing
+        # is recorded that could have torn, and purging every fresh document
+        # costs one forget() round trip per document on real Cognee.
+        if prev_may_be_missing and prev_records:
+            return "replace"
         return "upsert"
     derivative_safe = not prev_may_be_missing and all(
         record.data_id == desired.data_id

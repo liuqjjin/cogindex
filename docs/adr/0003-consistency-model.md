@@ -71,4 +71,12 @@ not merely to exercise error paths.
   exactly-once).
 - `verify()` exists to detect residual drift (external mutation, operator
   error) that the model cannot prevent, e.g. a human deleting Cognee data
-  behind the connector's back.
+  behind the connector's back. It compares presence, identity, completion
+  and label — **not** whether derivatives match current content, so stale or
+  absent derivatives under an otherwise healthy row are invisible to it.
+- Losing the tracking store is outside the convergence argument: uncertainty
+  the engine *records* is replayed conservatively, but uncertainty that is
+  *erased* leaves documents looking brand new while Cognee still holds their
+  old derivatives. Recovery is one dataset-level
+  `forget(dataset_id=…, memory_only=True)` followed by a re-run (ADR-0004's
+  second amendment).

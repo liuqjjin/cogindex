@@ -1,9 +1,10 @@
 """Deterministic fault-injection matrix (ADR-0003/0004).
 
-Each test crashes one specific phase of the write protocol, asserts the
-exact mid-crash external state (what landed, what didn't), then proves the
-next sync converges. Complements the randomized Hypothesis machine in
-tests/property/ with named, reviewable scenarios:
+Each test crashes one specific phase of the write protocol, then proves the
+next sync converges. Scenarios 1-5 and 10 additionally assert the exact
+mid-crash external state (what landed, what didn't); 6-9 assert only the
+recovery. Complements the randomized Hypothesis machine in tests/property/
+with named, reviewable scenarios:
 
  1. crash before any external write (lock acquisition)
  2. crash after hard deletes, before purges
@@ -14,6 +15,8 @@ tests/property/ with named, reviewable scenarios:
  7. crash in a delete-only batch
  8. processing-config change crashing mid-invalidation
  9. stale-identity cleanup crashing mid-delete
+10. torn hard delete (derivatives gone, row and COMPLETED status kept),
+    then the same content is declared again
 
 Plus: concurrent batches on one dataset are serialized by the dataset lock.
 """
@@ -297,6 +300,45 @@ async def test_stale_identity_crash_mid_cleanup() -> None:
     assert dataset is not None
     assert old_id not in dataset.documents
     assert_converged(fake, engine, {"a.md": spec_a}, PROFILE_A)
+
+
+# =============================================================================
+# 10. Torn hard delete, then the same content is declared again
+# =============================================================================
+
+
+async def test_torn_delete_then_redeclare_rebuilds_derivatives() -> None:
+    """The convergence hole a no-purge create path leaves open (ADR-0004).
+
+    Upstream's hard delete removes graph/vector derivatives before the
+    relational row that carries pipeline_status, so a crash in between leaves
+    the document present and COMPLETED with nothing derived from it. The
+    engine then hands the next reconcile prev=[last record] with
+    prev_may_be_missing=True. Classifying that as a plain create would issue
+    only add+cognify: the add sees unchanged content so it resets no status,
+    cognify's completion gate skips the item, and the tracking record commits
+    over a document that no later reconcile will ever revisit — a permanent
+    non-convergent fixed point that verify_dataset cannot see, because both
+    metadata and completion status match.
+    """
+    fake, engine = make_stack()
+    declared = {"a.md": spec("alpha")}
+    await engine.sync(declared)
+
+    # The document stops being declared; the hard delete tears mid-flight.
+    fake.inject_fault("delete_documents", torn=True)
+    assert await engine.sync_expect_crash({}, InjectedFault)
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.derived_fragments == set()  # derivatives went first...
+    assert document.cognify_complete is True  # ...the status went with the row
+
+    # It is declared again, with byte-identical content.
+    await engine.sync(declared)
+    assert_converged(fake, engine, declared, PROFILE_A)
+    # The purge is what makes this converge: without it cognify would skip
+    # the still-COMPLETED item and the derivatives would stay empty.
+    assert len(ops(fake, "purge_document_memory")) == 1
 
 
 # =============================================================================

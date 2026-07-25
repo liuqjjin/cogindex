@@ -92,6 +92,9 @@ def reconcile(
 
 
 def test_fresh_document_upserts_with_converged_tracking_record() -> None:
+    # No previous record means nothing is recorded that a torn delete could
+    # have left half-removed, so the create path skips the purge — which on
+    # real Cognee costs one forget() round trip per document.
     spec = make_spec()
     output = reconcile(make_handler(), spec, [], True)
     assert output is not None
@@ -111,12 +114,17 @@ def test_converged_record_is_noop() -> None:
     assert reconcile(make_handler(), spec, [record_for(spec)], False) is None
 
 
-def test_same_record_but_possibly_missing_upserts() -> None:
-    # Ensure path: the record may not have been committed, so re-run add+cognify.
+def test_same_record_but_possibly_missing_replaces() -> None:
+    # A recorded document whose state we cannot confirm is ADR-0004's Replace
+    # trigger, not a create. A torn hard delete removes derivatives before the
+    # row and its COMPLETED cognify status, so add+cognify alone would commit
+    # this record over a document that has no derivatives and that no later
+    # reconcile would revisit. Pinned end to end by
+    # test_fault_matrix.py::test_torn_delete_then_redeclare_rebuilds_derivatives.
     spec = make_spec()
     output = reconcile(make_handler(), spec, [record_for(spec)], True)
     assert output is not None
-    assert output.action.op == "upsert"
+    assert output.action.op == "replace"
 
 
 def test_content_change_replaces() -> None:

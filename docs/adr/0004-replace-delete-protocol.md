@@ -28,13 +28,14 @@ Status: accepted · Date: 2026-07-24
 `reconcile()` classifies each document into four actions; the sink executes
 them per dataset in a fixed order.
 
-**Create** (no previous record, or previous may be missing):
+**Create** (no previous record at all):
 1. `add([DataItem(data, data_id=…)], dataset_id=…)` — upsert, safe if the row
    already exists from a torn earlier attempt;
 2. one incremental `cognify(dataset)` per dataset per batch.
 
 **Replace** (content or processing fingerprint changed, or previous state
-uncertain):
+uncertain — including a *recorded* document whose state may be missing; see
+the second amendment):
 1. `forget(data_id=…, dataset_id=…, memory_only=True)` — purge old
    derivatives; harmless if none exist;
 2. `add(...)` with the *same* `data_id` and new content;
@@ -108,3 +109,50 @@ unchanged content is preserved by ingestion's own content-hash comparison
 and the cognify-side incremental gate is unaffected. Found by — and pinned
 in — `tests/integration/test_local_cognee.py`; the initial code audit
 missed the gate's routing condition.
+
+## Amendment: uncertain state over a recorded document is Replace, not Create
+
+The original classification sent every statediff `insert`/`upsert` down the
+Create path. That is wrong whenever a *recorded* document's state cannot be
+confirmed, because the hard delete tears in a specific order:
+`datasets.delete_data` removes graph and vector derivatives first
+(`delete_data_nodes_and_edges`) and the relational row — which carries
+`pipeline_status` — last. A crash in between leaves the document present
+with **no derivatives and a COMPLETED cognify status**.
+
+The engine then hands the next reconcile `prev=[last record]` with
+`prev_may_be_missing=True`. Under the Create path the sink issues only
+add + cognify: the add sees unchanged content so it resets no status, the
+cognify gate skips the still-COMPLETED item, and the tracking record commits
+over a document that will never be cognified again. The next `reconcile()`
+returns `None` — a permanent non-convergent fixed point, and one
+`verify_dataset` cannot see, since presence, label and completion all match.
+
+The rule is therefore: **`prev_may_be_missing=True` with a non-empty
+`prev_possible_records` classifies as Replace.** The extra
+`forget(memory_only=True)` is idempotent and a no-op when the state is
+intact. Pinned by `tests/unit/test_fault_matrix.py::
+test_torn_delete_then_redeclare_rebuilds_derivatives`, which needs the
+fake's `inject_fault("delete_documents", torn=True)` to reproduce the
+ordering — an atomic delete cannot express this hazard.
+
+**Empty `prev_possible_records` deliberately keeps the Create path**, even
+under `prev_may_be_missing=True` (which the engine forces for every fresh
+key). Nothing is recorded that could have torn, and purging unconditionally
+would cost one `forget()` round trip per document on every first ingest:
+measured at ~1.17 s per document against a real local stack (24 documents
+took 28 s to purge, versus 3.4 s to add), because `forget()` is per-`data_id`
+and re-resolves and re-authorizes the dataset each call.
+
+The residual gap that leaves: a document whose tracking was **lost** rather
+than made uncertain (CocoIndex's store deleted or reset, or a destructive
+provider-generation bump) reaches reconcile as `prev=[]` while Cognee still
+holds its old derivatives; a subsequent content change would then orphan
+them. This is a one-off operational event, not a steady-state hazard, and it
+has an O(1) recovery that costs nothing in the normal path:
+
+```python
+# After losing or resetting the CocoIndex tracking store, purge the dataset's
+# derivatives once, then re-run the flow to rebuild them.
+await cognee.forget(dataset_id=..., memory_only=True)
+```

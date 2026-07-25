@@ -96,6 +96,7 @@ class _Fault:
     remaining: int
     after_items: int | None
     exc_factory: Callable[[], BaseException]
+    torn: bool = False
 
 
 class FakeCogneeRuntime:
@@ -106,6 +107,7 @@ class FakeCogneeRuntime:
         runtime.inject_fault("cognify_dataset")                # next call raises
         runtime.inject_fault("add_documents", after_items=2)   # partial batch
         runtime.inject_fault("dataset_lock", times=3)          # next 3 raise
+        runtime.inject_fault("delete_documents", torn=True)    # derivatives gone, row kept
 
     Every mutating call is appended to ``calls`` (op, dataset name, detail)
     so tests can assert ordering — e.g. purges before adds, one cognify per
@@ -128,12 +130,15 @@ class FakeCogneeRuntime:
         *,
         times: int = 1,
         after_items: int | None = None,
+        torn: bool = False,
         exc: BaseException | type[BaseException] | None = None,
     ) -> None:
         if op not in _FAULT_OPS:
             raise ValueError(f"unknown op {op!r}; valid: {sorted(_FAULT_OPS)}")
         if after_items is not None and op != "add_documents":
             raise ValueError("after_items only applies to add_documents")
+        if torn and op != "delete_documents":
+            raise ValueError("torn only applies to delete_documents")
         exc_factory: Callable[[], BaseException]
         if exc is None:
 
@@ -149,7 +154,7 @@ class FakeCogneeRuntime:
         else:
             exc_factory = exc
         self._faults.setdefault(op, []).append(
-            _Fault(remaining=times, after_items=after_items, exc_factory=exc_factory)
+            _Fault(remaining=times, after_items=after_items, exc_factory=exc_factory, torn=torn)
         )
 
     def clear_faults(self) -> None:
@@ -225,8 +230,22 @@ class FakeCogneeRuntime:
     async def delete_documents(self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]) -> None:
         await _yield_point()
         self.calls.append(("delete_documents", handle.name, tuple(str(d) for d in data_ids)))
-        self._fire("delete_documents")
+        fault = self._next_fault("delete_documents")
         dataset = self.datasets.get((handle.tenant, handle.name))
+        if fault is not None and fault.torn and dataset is not None:
+            # Upstream-faithful tear: datasets.delete_data removes graph and
+            # vector derivatives first and the relational row — which carries
+            # pipeline_status — last, so a crash in between leaves the
+            # document present and COMPLETED with no derivatives at all. An
+            # atomic delete cannot expose the convergence hazard that state
+            # creates for the next reconcile (ADR-0004).
+            for data_id in data_ids:
+                document = dataset.documents.get(data_id)
+                if document is not None:
+                    document.derived_fragments.clear()
+                    document.derived_profile = None
+        if fault is not None:
+            raise fault.exc_factory()
         if dataset is None:
             return
         for data_id in data_ids:
