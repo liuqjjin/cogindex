@@ -166,6 +166,22 @@ flow is the repair) and `doctor()` (read-only environment checks).
   does make the property tier fail; disabling the dataset lock does **not**
   (only `tests/unit/test_fault_matrix.py::test_concurrent_batches_serialize_
   under_dataset_lock` catches that).
+- **`examples/` and `benchmarks/` have no automated gate at all**: ruff lints
+  them, mypy does not (`files = ["src", "tests"]`), and no test executes
+  them. Three real defects hid in `quickstart_live.py` behind that gap. After
+  touching an example, run it — the quickstart's documented claims are only
+  covered by doing this, with a **relative** folder path and a subfolder,
+  because both were where it broke:
+
+  ```bash
+  mkdir -p /tmp/qs/docs/nested && cd /tmp/qs
+  printf 'Bob works for AlphaCorp.\n' > docs/bob.md
+  printf 'Dave works for BetaCorp.\n' > docs/nested/dave.md
+  python <repo>/examples/quickstart_live.py ./docs --deterministic --storage ./storage
+  # expect "0 issues"; then re-run unchanged (idempotent), re-run with the
+  # folder spelled absolutely (identity must not change), edit a file
+  # (replacement), and delete one (cleanup) — each must stay at 0 issues.
+  ```
 
 ## Coding standards
 
@@ -249,16 +265,16 @@ per-finding refutation stage was cut short by a session limit, so these are
 audit, API/packaging, runtime failure model) never produced a result at all,
 so that surface is still un-reviewed.
 
-**Fixed** — `src/cogindex/_target.py` `_classify_write` no longer sends
-uncertain state over a recorded document down the no-purge create path
-(ADR-0004's second amendment, pinned by fault-matrix scenario 10). The
-residual `prev=[]`-after-tracking-loss gap is documented there with its
-O(1) recovery, not silently closed.
+**Fixed so far** — (1) `_classify_write` no longer sends uncertain state over
+a recorded document down the no-purge create path (ADR-0004's second
+amendment, pinned by fault-matrix scenario 10); the residual
+`prev=[]`-after-tracking-loss gap is documented there with its O(1) recovery
+rather than silently closed. (2) `tests/common/engine_model.py` now models
+both engine `prev_may_be_missing` transitions as upstream pins them, which
+made the metadata-preserving retry testable (scenario 11). (3)
+`examples/quickstart_live.py` derives document keys in one place and walks
+recursively.
 
-- **CRITICAL `examples/quickstart_live.py:124-128` vs `:152`** — with a
-  relative folder argument the declared keys keep the folder prefix while the
-  expectations strip it, so `verify_dataset` reports every document as both
-  missing and unexpected. Works only with an absolute path.
 - **CRITICAL `docs/adr/0007-runtime-abstraction.md:38-45`,
   `docs/upstream-proposals/0002`, `README.md:68`** — they describe
   `RemoteCogneeRuntime` as existing; no such class exists anywhere, and

@@ -29,7 +29,9 @@ from typing import Any
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("folder", type=pathlib.Path, help="folder of .md/.txt files")
+    parser.add_argument(
+        "folder", type=pathlib.Path, help="folder of .md/.txt files, searched recursively"
+    )
     parser.add_argument("--dataset", default="quickstart", help="Cognee dataset name")
     parser.add_argument("--live", action="store_true", help="watch and sync continuously")
     parser.add_argument("--search", default=None, help="run a search after syncing")
@@ -46,6 +48,23 @@ def parse_args() -> argparse.Namespace:
         help="where Cognee stores its data/databases",
     )
     return parser.parse_args()
+
+
+def document_key(path: pathlib.Path, folder_root: pathlib.Path) -> str:
+    """Stable identity for one file: its path relative to the watched folder.
+
+    Deriving it in one place is the point. Identity must not depend on how the
+    folder was spelled on the command line — a relative `./my-docs` and an
+    absolute `/home/me/my-docs` are the same folder and must produce the same
+    document keys — and the declaration side and the verification side must
+    never derive it differently, or every document reads as both missing and
+    unexpected. ``resolve()`` both sides: /tmp vs /private/tmp style symlinks
+    would otherwise make ``relative_to()`` fail.
+
+    ``resolve()`` stats the filesystem, so callers inside async code block
+    briefly — one stat per file, which is fine for an example.
+    """
+    return path.resolve().relative_to(folder_root).as_posix()
 
 
 @contextlib.contextmanager
@@ -116,16 +135,8 @@ async def main() -> None:
     @coco.fn
     async def process_file(file: localfs.File, target: cogindex.DatasetTarget) -> None:
         content = await file.read_text()
-        # Stable key = path relative to the watched folder (never absolute:
-        # moving the folder must not rename every document's identity).
-        # resolve() both sides — /tmp vs /private/tmp style symlinks would
-        # otherwise make relative_to() fail.
         path = pathlib.Path(file.file_path.path)
-        key = (
-            path.resolve().relative_to(folder_root).as_posix()  # noqa: ASYNC240 - one stat per file is fine for an example
-            if path.is_absolute()
-            else path.as_posix()
-        )
+        key = document_key(path, folder_root)
         target.declare_document(key, content, label=path.name)
 
     @coco.fn
@@ -134,6 +145,10 @@ async def main() -> None:
         files = localfs.walk_dir(
             args.folder,
             live=args.live,
+            # recursive defaults to False upstream, which would silently
+            # ignore subfolders while the `**/` patterns below (and the
+            # expectations built for verify_dataset) both mean "any depth".
+            recursive=True,
             path_matcher=PatternFilePathMatcher(included_patterns=["**/*.md", "**/*.txt"]),
         )
         await coco.mount_each(process_file, files.items(), target)
@@ -149,7 +164,7 @@ async def main() -> None:
         await app.update().result()
 
         expected = [
-            cogindex.ExpectedDocument(path.relative_to(args.folder).as_posix(), label=path.name)
+            cogindex.ExpectedDocument(document_key(path, folder_root), label=path.name)
             for pattern in ("**/*.md", "**/*.txt")
             for path in sorted(args.folder.glob(pattern))
         ]
