@@ -39,7 +39,7 @@ does rather than what changed.
   with deterministic LLM and embedding substitutes, an opt-in real-LLM tier,
   and a PostgreSQL lock tier. `tests/unit/test_compat.py` pins the upstream
   surface so an incompatible cognee release fails in CI rather than at
-  runtime. 87% coverage across the tiers that need no external services.
+  runtime. 89% coverage across the tiers that need no external service.
 - Seven-category benchmark harness with environment-fingerprinted reports,
   including a comparison against a hand-rolled Cognee integration that
   quantifies the superseded rows and stale graph entities cogindex avoids.
