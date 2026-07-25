@@ -4,7 +4,7 @@ These assignments must run before cognee is imported anywhere in the
 process:
 
 - ``MOCK_EMBEDDING`` is cognee's own deterministic-embedding switch (every
-  embedding engine checks it at call time) — the officially supported way
+  embedding engine checks it at call time), the officially supported way
   its test suite runs the full pipeline without an embedding provider.
 - ``TELEMETRY_DISABLED`` keeps the integration tier network-free.
 

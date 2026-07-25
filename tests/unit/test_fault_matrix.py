@@ -103,7 +103,7 @@ async def test_crash_before_any_write_then_recover() -> None:
 
     fake.inject_fault("dataset_lock")
     assert await engine.sync_expect_crash(declared, InjectedFault)
-    # Nothing external happened — not even a lock acquisition was recorded.
+    # Nothing external happened, not even a lock acquisition was recorded.
     assert fake.dataset(TENANT, DATASET) is None
     assert fake.calls == []
 
@@ -222,7 +222,7 @@ async def test_repeated_faults_then_success() -> None:
     assert await engine.sync_expect_crash(replaced, InjectedFault)
 
     await engine.sync(replaced)
-    # Convergence includes: exactly {v2} derivatives — the repeated
+    # Convergence includes: exactly {v2} derivatives, the repeated
     # purge/add cycles left no orphans behind.
     assert_converged(fake, engine, replaced, PROFILE_A)
 
@@ -318,7 +318,7 @@ async def test_torn_delete_then_redeclare_rebuilds_derivatives() -> None:
     prev_may_be_missing=True. Classifying that as a plain create would issue
     only add+cognify: the add sees unchanged content so it resets no status,
     cognify's completion gate skips the item, and the tracking record commits
-    over a document that no later reconcile will ever revisit — a permanent
+    over a document that no later reconcile will ever revisit, a permanent
     non-convergent fixed point that verify_dataset cannot see, because both
     metadata and completion status match.
     """
@@ -359,7 +359,7 @@ async def test_metadata_only_update_retry_preserves_derivatives() -> None:
     test_prev_may_be_missing_after_failed_update). Both agree on every
     derivative-affecting field, so the retry stays update_metadata: no purge,
     no second cognify, derivatives untouched. Escalating to replace here
-    would pay a full re-extraction for a label — the most expensive kind of
+    would pay a full re-extraction for a label, the most expensive kind of
     needless work this connector exists to avoid.
     """
     fake, engine = make_stack()

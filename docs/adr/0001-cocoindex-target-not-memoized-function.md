@@ -18,7 +18,7 @@ produced:
   simply never called again. Nothing removes the document's raw data, graph
   nodes, edges, or vectors from Cognee. Target states are owned by their
   declaring component path; when the path or declaration disappears, the
-  engine calls `reconcile(key, NON_EXISTENCE, prev, ...)` and cleanup runs —
+  engine calls `reconcile(key, NON_EXISTENCE, prev, ...)` and cleanup runs,
   even in a later process where the declaring code never executes.
 - **No replacement semantics.** Re-adding changed content to Cognee under the
   same `data_id` resets its pipeline status but leaves the previous content's
@@ -26,8 +26,8 @@ produced:
   `ingest_data.py`). Something must know the *previous* state to clean it up.
   Target tracking records carry exactly that.
 - **No failure-state tracking.** If a process dies between the Cognee write
-  and CocoIndex's own bookkeeping, memoization either re-runs everything or —
-  worse — considers the work done. The target-state protocol persists
+  and CocoIndex's own bookkeeping, memoization either re-runs everything or,
+  worse, considers the work done. The target-state protocol persists
   *multiple possible previous records* across a failed sink/commit and
   replays conservatively (`prev_possible_records`, `prev_may_be_missing`).
 - **No ownership or conflict detection.** Two flows writing the same Cognee

@@ -24,7 +24,7 @@ does rather than what changed.
   one incremental cognify per changed batch (ADR-0004), applied
   deletes-first under a per-dataset lock.
 - Configuration invalidation via per-document processing fingerprints plus
-  dataset-level lossy invalidation (ADR-0005) — Cognee's own incremental
+  dataset-level lossy invalidation (ADR-0005). Cognee's own incremental
   gate checks completion only.
 - `CogneeRuntime` protocol with `LocalCogneeRuntime` (lazy database setup,
   absolutized storage roots, idempotent missing-tolerant deletes, add-side

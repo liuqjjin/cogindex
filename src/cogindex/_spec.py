@@ -8,8 +8,8 @@ Two views of processing configuration exist on purpose (ADR-0005):
   data whose fingerprint is persisted per document and drives config
   invalidation.
 
-Derive the twin with :func:`processing_config_from_profile` — never
-hand-maintain both, or they will drift.
+Derive the twin with :func:`processing_config_from_profile`. Hand-maintaining
+both is how they drift apart.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class ProcessingConfig:
     The fingerprint of this config is stored per document; changing any field
     purges and re-cognifies every document in the dataset (ADR-0005). Keep
     out anything that does NOT change derivatives (batch sizes, concurrency,
-    telemetry) — putting it here causes needless full rebuilds.
+    telemetry). Putting it here causes needless full rebuilds.
     """
 
     graph_model_id: str | None = None

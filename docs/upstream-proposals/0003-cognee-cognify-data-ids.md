@@ -1,4 +1,4 @@
-# Proposal: `cognify(data_ids=...)` — scoped incremental processing
+# Proposal: scope a cognify run with `cognify(data_ids=...)`
 
 **Target:** cognee (audited at `90b4acaa`, applies to released 1.4.0)
 **Status:** draft (not yet filed upstream)
@@ -12,12 +12,12 @@ checked in `cognee/modules/pipelines/operations/pipeline.py`): every call
 still enumerates the dataset's data items and evaluates the gate per item.
 
 A connector that knows *exactly which* `data_id`s changed (cogindex always
-does — it drives cognify right after targeted adds/purges) cannot express
+does. It drives cognify right after targeted adds/purges) cannot express
 that. Costs:
 
 - O(dataset) per-item status reads for an O(changed) update, on every batch.
 - The connector must trust the status gate rather than being able to state
-  its intent ("process these three items") — a wider surface for drift.
+  its intent ("process these three items"), which is a wider surface for drift.
 
 ## Proposed change
 
@@ -31,7 +31,7 @@ async def cognify(
 ```
 
 Semantics: when `data_ids` is given, restrict the run to those items (items
-already COMPLETED may still be skipped — the existing gate remains the
+already COMPLETED may still be skipped; the existing gate remains the
 correctness backstop, `data_ids` is a scoping hint). Unknown ids: skipped
 with a warning, not an error, to keep the call idempotent/retry-safe.
 

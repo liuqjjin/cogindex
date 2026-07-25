@@ -32,7 +32,7 @@ class LocalCogneeRuntime:
 
     Args:
         data_root / system_root: where cognee stores raw data and databases.
-            Strongly recommended — cognee's defaults point inside its own
+            Strongly recommended. Cognee's defaults point inside its own
             installed package directory.
         lock_provider: dataset lock provider; defaults to in-process locks
             (matching cognee's own process-local locking). Use
@@ -112,7 +112,7 @@ class LocalCogneeRuntime:
                 # Never let the ADD pipeline's per-item skip gate swallow our
                 # payloads: with either incremental_loading=True or
                 # data_cache=True (both upstream defaults), a data_id whose
-                # add_pipeline status is COMPLETED is skipped entirely —
+                # add_pipeline status is COMPLETED is skipped entirely,
                 # replacement content would silently never be ingested
                 # (memory-only purge resets only cognify_pipeline, by
                 # upstream design). Idempotency for unchanged content is
@@ -177,7 +177,7 @@ class LocalCogneeRuntime:
         compat_info = _compat.load()
         try:
             # Empties the dataset: raw data + graph + vector. The dataset row
-            # itself survives — an upstream limitation documented in ADR-0004.
+            # itself survives, an upstream limitation documented in ADR-0004.
             await compat_info.cognee.forget(dataset_id=handle.dataset_id, user=self._user)
         except compat_info.dataset_missing_errors as exc:
             logger.info(
@@ -292,7 +292,7 @@ def _raise_on_errored_runs(result: Any, *, op: str, dataset: str) -> None:
     cognee's non-incremental pipeline path collects per-item failures as
     PipelineRunErrored entries in the *return value* and does not raise.
     Treating that as success would commit tracking records for writes that
-    never happened — the exact false-success ADR-0003 forbids.
+    never happened, which is exactly the false success ADR-0003 forbids.
     """
     errored: list[Any] = []
 

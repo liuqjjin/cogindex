@@ -11,7 +11,7 @@ Status: accepted · Date: 2026-07-24
 - `cognee.forget()` is the unified deletion API (keyword-only):
   - `forget(data_id=…, dataset_id=…, memory_only=True)` deletes the item's
     graph/vector derivatives and resets its cognify status, preserving the raw
-    data row — explicitly framed upstream as the "re-cognify with different
+    data row: explicitly framed upstream as the "re-cognify with different
     settings" primitive.
   - `forget(data_id=…, dataset_id=…)` hard-deletes raw data, dataset link,
     derivatives, and provenance refs.
@@ -21,7 +21,7 @@ Status: accepted · Date: 2026-07-24
   `(dataset, data)` survive with only the target ref detached. The ordering is
   retry-safe (vectors → detach survivors → delete unowned → orphan cleanup).
   On the default stack (Ladybug graph + LanceDB), provenance refs are folded
-  into graph writes atomically — there is no write-then-attach window.
+  into graph writes atomically. There is no write-then-attach window.
 
 ## Decision
 
@@ -29,14 +29,14 @@ Status: accepted · Date: 2026-07-24
 them per dataset in a fixed order.
 
 **Create** (no previous record at all):
-1. `add([DataItem(data, data_id=…)], dataset_id=…)` — upsert, safe if the row
+1. `add([DataItem(data, data_id=…)], dataset_id=…)`: upsert, safe if the row
    already exists from a torn earlier attempt;
 2. one incremental `cognify(dataset)` per dataset per batch.
 
 **Replace** (content or processing fingerprint changed, or previous state
-uncertain — including a *recorded* document whose state may be missing; see
+uncertain, including a *recorded* document whose state may be missing; see
 the second amendment):
-1. `forget(data_id=…, dataset_id=…, memory_only=True)` — purge old
+1. `forget(data_id=…, dataset_id=…, memory_only=True)`: purge old
    derivatives; harmless if none exist;
 2. `add(...)` with the *same* `data_id` and new content;
 3. incremental `cognify(dataset)`.
@@ -61,7 +61,7 @@ entity supported by two documents survives deletion of one (only its ref is
 detached) and is removed when its last supporting document goes. cogindex's
 integration tests assert this end-to-end (mirroring upstream's
 `test_shared_node_preservation.py`), because it is the property users depend
-on — but the mechanism is Cognee's, not ours.
+on, but the mechanism is Cognee's, not ours.
 
 ## Batching
 
@@ -69,7 +69,7 @@ Actions are grouped by `(runtime, dataset)`. Within a dataset batch:
 deletes and replace-purges first, then all adds (batched), then exactly one
 `cognify`. Deterministic order (sorted by document key) keeps runs comparable
 and logs reproducible. Partial failures propagate; nothing is swallowed.
-Structured logs record phase and timing only — never content, never secrets.
+Structured logs record phase and timing only, never content, never secrets.
 
 ## Dataset teardown and unmount semantics (verified against the engine)
 
@@ -79,7 +79,7 @@ more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
 
 - **System-managed** (`managed_by="system"`): the container sink calls
   `teardown_dataset`, which empties the dataset via `forget(dataset_id=...)`
-  — raw data, graph, and vector derivatives. The dataset *row* survives:
+  of raw data, graph, and vector derivatives. The dataset *row* survives:
   upstream's `empty_dataset` keeps it, and there is no public dataset-row
   delete API. Documented as an upstream limitation, not papered over.
 - **User-managed** (`managed_by="user"`): `resolve_system_transition` yields
@@ -97,7 +97,7 @@ dataset, and returns.
 ## Amendment: the add-side skip gate (integration-tier discovery)
 
 `cognee.add()`'s per-item pipeline ALSO has a skip gate, routed whenever
-`data_cache or incremental_loading` — and both default to True. A data_id
+`data_cache or incremental_loading`, and both default to True. A data_id
 whose `add_pipeline` status is COMPLETED is then skipped before ingestion
 runs: replacement content would silently never be written, because
 `forget(memory_only=True)` deliberately resets only `cognify_pipeline`.
@@ -106,8 +106,8 @@ The connector therefore always calls
 `add(..., incremental_loading=False, data_cache=False)`. Idempotency for
 unchanged content is preserved by ingestion's own content-hash comparison
 (no pipeline-status reset when the hash is equal, so cognify still skips),
-and the cognify-side incremental gate is unaffected. Found by — and pinned
-in — `tests/integration/test_local_cognee.py`; the initial code audit
+and the cognify-side incremental gate is unaffected. Found by, and pinned in,
+`tests/integration/test_local_cognee.py`; the initial code audit
 missed the gate's routing condition.
 
 ## Amendment: uncertain state over a recorded document is Replace, not Create
@@ -116,8 +116,8 @@ The original classification sent every statediff `insert`/`upsert` down the
 Create path. That is wrong whenever a *recorded* document's state cannot be
 confirmed, because the hard delete tears in a specific order:
 `datasets.delete_data` removes graph and vector derivatives first
-(`delete_data_nodes_and_edges`) and the relational row — which carries
-`pipeline_status` — last. A crash in between leaves the document present
+(`delete_data_nodes_and_edges`) and the relational row, which carries
+`pipeline_status`, last. A crash in between leaves the document present
 with **no derivatives and a COMPLETED cognify status**.
 
 The engine then hands the next reconcile `prev=[last record]` with
@@ -125,7 +125,7 @@ The engine then hands the next reconcile `prev=[last record]` with
 add + cognify: the add sees unchanged content so it resets no status, the
 cognify gate skips the still-COMPLETED item, and the tracking record commits
 over a document that will never be cognified again. The next `reconcile()`
-returns `None` — a permanent non-convergent fixed point, and one
+returns `None`, a permanent non-convergent fixed point, and one
 `verify_dataset` cannot see, since presence, label and completion all match.
 
 The rule is therefore: **`prev_may_be_missing=True` with a non-empty
@@ -134,7 +134,7 @@ The rule is therefore: **`prev_may_be_missing=True` with a non-empty
 intact. Pinned by `tests/unit/test_fault_matrix.py::
 test_torn_delete_then_redeclare_rebuilds_derivatives`, which needs the
 fake's `inject_fault("delete_documents", torn=True)` to reproduce the
-ordering — an atomic delete cannot express this hazard.
+ordering, an atomic delete cannot express this hazard.
 
 **Empty `prev_possible_records` deliberately keeps the Create path**, even
 under `prev_may_be_missing=True` (which the engine forces for every fresh

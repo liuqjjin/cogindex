@@ -53,7 +53,7 @@ def _document(runtime: FakeCogneeRuntime, data_id: uuid.UUID) -> FakeDocument:
 
 
 # =============================================================================
-# Part A — InProcessLockProvider
+# Part A: InProcessLockProvider
 # =============================================================================
 
 
@@ -130,7 +130,7 @@ async def test_lock_distinct_scopes_do_not_block_each_other() -> None:
 
 
 # =============================================================================
-# Part B — advisory_lock_key (pure function; no database)
+# Part B: advisory_lock_key (pure function; no database)
 # =============================================================================
 
 
@@ -147,7 +147,7 @@ def test_advisory_lock_key_deterministic_distinct_and_in_range() -> None:
 
 
 # =============================================================================
-# Part C — FakeCogneeRuntime upstream-faithful semantics
+# Part C: FakeCogneeRuntime upstream-faithful semantics
 # =============================================================================
 
 
@@ -256,7 +256,7 @@ async def test_cognify_gate_ignores_profile_change() -> None:
     )
     await runtime.cognify_dataset(handle, old_profile)
 
-    # Upstream incremental gate checks completion only, never configuration —
+    # Upstream incremental gate checks completion only, never configuration,
     # the already-complete document is skipped and keeps the OLD profile.
     await runtime.cognify_dataset(handle, new_profile)
     document = _document(runtime, data_id)
@@ -333,7 +333,7 @@ async def test_inject_fault_times_after_items_custom_exc_and_unknown_op() -> Non
 
 
 # =============================================================================
-# Part D — secret-free logging
+# Part D: secret-free logging
 # =============================================================================
 
 

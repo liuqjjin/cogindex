@@ -26,7 +26,7 @@ class LockProvider(Protocol):
 
 
 class InProcessLockProvider:
-    """Per-scope ``asyncio.Lock`` map — the default provider.
+    """The default provider: one ``asyncio.Lock`` per scope.
 
     Serializes work within one process/event loop only, which matches
     Cognee's own dataset locking (also process-local). Use

@@ -6,7 +6,7 @@ syncs that crash at every phase of the write protocol (lock acquisition,
 deletes, purges, partial adds, cognify), against the emulated engine
 tracking semantics in tests/common/engine_model.py.
 
-The property: **any successful sync converges** — the fake Cognee state
+The property: **any successful sync converges**, the fake Cognee state
 equals the reference model (exactly the declared documents, fresh
 derivatives, current config), reconciliation reaches a fixed point, and no
 sequence of prior crashes can break this. Safety holds even after crashed
@@ -189,7 +189,7 @@ class ConvergenceMachine(RuleBasedStateMachine):
             assert document.payload.label == spec.label
             assert document.payload.node_set == spec.node_set
             assert document.cognify_complete
-            # Exactly the current content's derivatives — no orphans from
+            # Exactly the current content's derivatives, no orphans from
             # earlier versions (the replace protocol's whole point).
             assert document.derived_fragments == {fingerprint_content(spec.content)}
             assert document.derived_profile == profile

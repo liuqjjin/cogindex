@@ -1,10 +1,10 @@
 """Test doubles: an in-memory Cognee emulator with fault injection.
 
 :class:`FakeCogneeRuntime` emulates exactly the Cognee semantics cogindex
-depends on — implicit dataset creation, data_id-keyed rows, the derivative
+depends on: implicit dataset creation, data_id-keyed rows, the derivative
 lifecycle (including the upstream behavior that re-adding changed content
 resets pipeline status but KEEPS stale derivatives, and that the incremental
-cognify gate checks completion only, never configuration) — so unit and
+cognify gate checks completion only, never configuration), so unit and
 property tests can assert convergence without a real Cognee stack.
 
 It is not a Cognee replacement, and tests built on it are never presented as
@@ -65,7 +65,7 @@ class FakeDocument:
     ``derived_fragments`` holds the content fingerprints whose graph/vector
     derivatives currently exist. Upstream-faithfully, cognify *adds* the
     current content's derivatives and nothing removes old ones except an
-    explicit memory purge — re-adding changed content and cognifying without
+    explicit memory purge. Re-adding changed content and cognifying without
     purging leaves orphaned derivatives behind. That accumulation is exactly
     the hazard ADR-0004's replace protocol closes, so the emulator must make
     it observable.
@@ -110,9 +110,9 @@ class FakeCogneeRuntime:
         runtime.inject_fault("delete_documents", torn=True)    # derivatives gone, row kept
 
     Every mutating call is appended to ``calls`` (op, dataset name, detail)
-    so tests can assert ordering — e.g. purges before adds, one cognify per
+    so tests can assert ordering, e.g. purges before adds, one cognify per
     batch. Entries record *attempts*: a scripted fault fires after the call
-    is logged but before any state changes — except add_documents, whose
+    is logged but before any state changes, except add_documents, whose
     entry lists exactly the payloads that were applied before the fault.
     """
 
@@ -234,8 +234,8 @@ class FakeCogneeRuntime:
         dataset = self.datasets.get((handle.tenant, handle.name))
         if fault is not None and fault.torn and dataset is not None:
             # Upstream-faithful tear: datasets.delete_data removes graph and
-            # vector derivatives first and the relational row — which carries
-            # pipeline_status — last, so a crash in between leaves the
+            # vector derivatives first and the relational row, which carries
+            # pipeline_status, last, so a crash in between leaves the
             # document present and COMPLETED with no derivatives at all. An
             # atomic delete cannot expose the convergence hazard that state
             # creates for the next reconcile (ADR-0004).
@@ -261,7 +261,7 @@ class FakeCogneeRuntime:
         for data_id in sorted(dataset.documents, key=str):
             document = dataset.documents[data_id]
             # Upstream-faithful incremental gate: completion only. No config
-            # comparison — config invalidation is cogindex's job, and this
+            # comparison. Config invalidation is cogindex's job, and this
             # emulation must be able to expose it when cogindex gets it wrong.
             if document.cognify_complete:
                 continue

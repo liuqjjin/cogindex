@@ -1,8 +1,8 @@
 """Real local Cognee stack integration (marker: integration).
 
-Runs LocalCogneeRuntime against a genuine Cognee deployment — SQLite
+Runs LocalCogneeRuntime against a genuine Cognee deployment: SQLite
 relational store, LanceDB vector store, embedded graph database, real
-ingestion/chunking/provenance — with deterministic substitutes for the two
+ingestion/chunking/provenance, with deterministic substitutes for the two
 nondeterministic components only: the LLM (patched ``LLMGateway``, as
 upstream's own pipeline tests do) and embeddings (cognee's
 ``MOCK_EMBEDDING`` switch). No network. These are integration tests of the

@@ -3,12 +3,12 @@
 Both examples run fully locally. With an LLM configured (see
 [.env.example](../.env.example)) they use it; with `--deterministic` (or by
 default, for the demo) they substitute a deterministic mock LLM and
-mock embeddings — the same mechanism the test suite and cognee's own tests
+mock embeddings, the same mechanism the test suite and cognee's own tests
 use. Mocked output is clearly labeled and is **not** representative of real
 extraction quality; it exists so the *materialization mechanics* can be
 demonstrated without credentials.
 
-## quickstart_live.py — folder → knowledge graph
+## quickstart_live.py: folder → knowledge graph
 
 ```bash
 python examples/quickstart_live.py ./my-docs --deterministic
@@ -24,12 +24,12 @@ across runs), in-place replacement on edit, cleanup on delete, and
 
 Note on batching: this example uses the idiomatic per-file component
 pattern (`mount_each`), which lets the engine memoize and live-update per
-file — at the cost of one small sync batch per changed file. If you ingest
+file, at the cost of one small sync batch per changed file. If you ingest
 thousands of documents at once and cognify cost dominates, declare
 documents from a single component instead (one batched add + one cognify
 per sync; see `tests/unit/test_engine_lifecycle.py` for the pattern).
 
-## shared_entity_demo.py — provenance in action
+## shared_entity_demo.py: provenance in action
 
 ```bash
 python examples/shared_entity_demo.py

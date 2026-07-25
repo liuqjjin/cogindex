@@ -10,10 +10,10 @@
 6. verify_read          drift verification read path over N documents
 
 Modes:
-- ``fake``: connector layer over the in-memory FakeCogneeRuntime — measures
+- ``fake``: connector layer over the in-memory FakeCogneeRuntime: measures
   cogindex + cocoindex engine overhead in isolation.
 - ``real``: real local Cognee stack (SQLite + LanceDB + embedded graph) with
-  deterministic LLM/embedding substitutes — measures the full local pipeline
+  deterministic LLM/embedding substitutes: measures the full local pipeline
   without model latency. Much smaller document counts.
 
 Everything runs inside ONE asyncio loop (``await app.update().result()``):

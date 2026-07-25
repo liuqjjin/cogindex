@@ -3,7 +3,7 @@
 cognee's non-incremental pipeline path collects in-task failures as
 ``PipelineRunErrored`` entries in its RETURN VALUE and does not raise
 (observed live: a relative data root breaks ingestion inside the task and
-``add()`` returns normally — recorded in
+``add()`` returns normally: recorded in
 docs/upstream-audit/cognee/findings.md). Treating that as success would
 commit tracking records for writes that never happened, so
 ``LocalCogneeRuntime`` scans every add/cognify result and raises. These

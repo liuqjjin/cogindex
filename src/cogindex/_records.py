@@ -34,9 +34,9 @@ class DocumentRecord(msgspec.Struct, frozen=True):
     - ``data_id``: the derived stable identity, recorded for observability
       and drift verification.
     - ``content_fingerprint`` / ``annotations_fingerprint`` /
-      ``processing_fingerprint`` / ``schema_version``: derivative-affecting —
+      ``processing_fingerprint`` / ``schema_version``: derivative-affecting,
       any difference forces purge + re-add + cognify.
-    - ``metadata_fingerprint``: benign — a difference re-adds (metadata
+    - ``metadata_fingerprint``: benign, a difference re-adds (metadata
       upsert) without purging graph/vector derivatives.
     """
 

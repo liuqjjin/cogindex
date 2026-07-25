@@ -1,4 +1,4 @@
-# ADR-0007: Runtime abstraction — local SDK first, REST honestly limited
+# ADR-0007: Runtime abstraction, local SDK only
 
 Status: accepted · Date: 2026-07-24
 
@@ -12,11 +12,11 @@ server).
 Audited constraints:
 
 - The Python SDK supports explicit stable identity via
-  `DataItem(data_id=…)` — but `DataItem` is not exported at the package top
+  `DataItem(data_id=…)`, but `DataItem` is not exported at the package top
   level (only `cognee.tasks.ingestion.data_item`).
 - The REST API (`POST /v1/add`) has **no** parameter for a caller-supplied
-  data id; ids are content-derived server-side. Stable identity — the
-  foundation of this connector (ADR-0002) — cannot be expressed over REST
+  data id; ids are content-derived server-side. Stable identity, the
+  foundation of this connector (ADR-0002), cannot be expressed over REST
   today.
 
 ## Decision

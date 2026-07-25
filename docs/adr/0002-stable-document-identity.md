@@ -7,8 +7,8 @@ Status: accepted · Date: 2026-07-24
 Cognee's default data identity is content-derived:
 `uuid5(NAMESPACE_OID, f"{md5(content)}{user.id}{tenant_id}")`
 (`cognee/modules/data/methods/get_unique_data_id.py`). Under that scheme an
-edited document becomes a *new* document, and the old one — with its graph and
-vector derivatives — is orphaned rather than replaced.
+edited document becomes a *new* document, and the old one, with its graph and
+vector derivatives, is orphaned rather than replaced.
 
 Cognee's Python API accepts an explicit override:
 `DataItem(data=..., data_id=...)` (`cognee/tasks/ingestion/data_item.py`).
@@ -44,10 +44,10 @@ never collide by concatenation.
 **Content never participates in identity.** Content participates only in the
 *fingerprints* stored in the tracking record:
 
-- `content_fingerprint` — over the normalized document payload;
-- `annotations_fingerprint` — over node-set and importance weight;
-- `metadata_fingerprint` — over label and external metadata;
-- `processing_fingerprint` — over everything else that affects derivatives
+- `content_fingerprint`: over the normalized document payload;
+- `annotations_fingerprint`: over node-set and importance weight;
+- `metadata_fingerprint`: over label and external metadata;
+- `processing_fingerprint`: over everything else that affects derivatives
   (ADR-0005).
 
 The split between the last two is the whole point of having four values
@@ -78,7 +78,7 @@ which is precisely the staleness bug this project exists to prevent.
   that feed in filesystem paths should normalize on their side, as
   `examples/quickstart_live.py` does. Pinned by `tests/unit/test_identity.py`.
 - The same logical document declared through the same runtime/tenant/dataset
-  always maps to the same Cognee row, across processes and machines — the
-  precondition for idempotent replay.
+  always maps to the same Cognee row, across processes and machines. That is
+  the precondition for idempotent replay.
 - Renames are, by design, a delete + create of two identities. Rename
   detection is out of scope.

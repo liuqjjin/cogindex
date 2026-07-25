@@ -19,9 +19,9 @@ from cognee.tasks.ingestion.data_item import DataItem  # feels private
 ```
 
 Stable external identity is the foundation of any incremental integration
-(without a caller-provided `data_id`, the default id is content-derived —
+(without a caller-provided `data_id`, the default id is content-derived,
 `uuid5(NAMESPACE_OID, md5(content) + user + tenant)` in
-`cognee/modules/data/methods/get_unique_data_id.py` — so every content edit
+`cognee/modules/data/methods/get_unique_data_id.py`, so every content edit
 creates a new document instead of replacing the old one). A capability this
 central should be part of the public API surface.
 

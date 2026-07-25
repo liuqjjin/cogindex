@@ -2,8 +2,8 @@
 """Generate the mechanical part of the upstream source-audit ledger.
 
 Walks a git clone, classifies every tracked file, and emits:
-  - ``inventory.jsonl``  — one record per tracked file (machine-readable)
-  - ``summary.md``       — category/module roll-up (human-readable)
+  - ``inventory.jsonl``  one record per tracked file (machine-readable)
+  - ``summary.md``       category/module roll-up (human-readable)
 
 The generated records intentionally leave ``audit_status`` as
 ``"mechanical"``; deep/skim review states are recorded separately in

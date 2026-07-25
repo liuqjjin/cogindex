@@ -59,7 +59,7 @@ class CogneeCompat:
     cognee: ModuleType
     version: str
     data_item_cls: type[Any]
-    # Exceptions that mean "the dataset is gone / not visible" — treated as
+    # Exceptions that mean "the dataset is gone / not visible", treated as
     # success by idempotent delete paths (ADR-0004).
     dataset_missing_errors: tuple[type[BaseException], ...]
     # Effective defaults cognify() would use if we pass nothing, captured

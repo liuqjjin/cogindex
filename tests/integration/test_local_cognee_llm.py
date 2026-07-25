@@ -1,6 +1,6 @@
 """Opt-in real-LLM end-to-end test (marker: integration_llm).
 
-Runs the full pipeline — real LLM, real embeddings, real local stack — with
+Runs the full pipeline: real LLM, real embeddings, real local stack: with
 no mocks at all. Costs money and is nondeterministic by nature, so it is
 opt-in: set ``COGINDEX_RUN_LLM_TESTS=1`` and configure an LLM provider
 (``LLM_API_KEY`` etc., see .env.example). Assertions are structural

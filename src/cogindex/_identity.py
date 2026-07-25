@@ -1,7 +1,7 @@
 """Stable identity and fingerprinting (ADR-0002).
 
-Document identity is a pure function of *logical coordinates* — never of
-content — so that updated content maps onto the same Cognee ``data_id`` and
+Document identity is a pure function of *logical coordinates*, never of
+content, so that updated content maps onto the same Cognee ``data_id`` and
 replacement works in place. Fingerprints capture content/config and drive
 change detection; they never participate in identity.
 
@@ -28,7 +28,7 @@ __all__ = [
     "normalize_external_key",
 ]
 
-# uuid5(NAMESPACE_DNS, "cogindex") — fixed forever; changing it would rename
+# uuid5(NAMESPACE_DNS, "cogindex"): fixed forever; changing it would rename
 # every managed document.
 COGINDEX_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "cogindex")
 

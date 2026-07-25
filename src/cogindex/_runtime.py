@@ -18,7 +18,7 @@ class DatasetHandle:
     """Reference to a (possibly not-yet-materialized) Cognee dataset.
 
     ``dataset_id`` is None until the dataset exists: Cognee creates datasets
-    implicitly on first ``add()`` — there is no public create API.
+    implicitly on first ``add()``. There is no public create API.
     """
 
     name: str
@@ -90,7 +90,7 @@ class CogneeRuntime(Protocol):
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
         """Run incremental cognify over the dataset: items whose pipeline
         status is already complete are skipped by Cognee. Config invalidation
-        is cogindex's job — the caller must have purged anything stale."""
+        is cogindex's job; the caller must have purged anything stale."""
         ...
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:

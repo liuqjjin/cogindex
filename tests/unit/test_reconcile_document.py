@@ -1,7 +1,7 @@
 """DocumentHandler.reconcile decision matrix (pure, no engine).
 
-Covers the ADR-0003/0004/0005 write-op classification — upsert vs replace vs
-update_metadata vs delete — plus the deliberate statediff deviations, stale
+Covers the ADR-0003/0004/0005 write-op classification: upsert vs replace vs
+update_metadata vs delete, plus the deliberate statediff deviations, stale
 identity collection, key validation, and payload/tracking-record contents.
 """
 
@@ -93,7 +93,7 @@ def reconcile(
 
 def test_fresh_document_upserts_with_converged_tracking_record() -> None:
     # No previous record means nothing is recorded that a torn delete could
-    # have left half-removed, so the create path skips the purge — which on
+    # have left half-removed, so the create path skips the purge, which on
     # real Cognee costs one forget() round trip per document.
     spec = make_spec()
     output = reconcile(make_handler(), spec, [], True)
@@ -153,7 +153,7 @@ def test_metadata_only_retry_after_failed_update_still_updates_metadata() -> Non
     # test_prev_may_be_missing_after_failed_update: a failed metadata update
     # leaves both the committed and the attempted record as possible states,
     # with prev_may_be_missing=False. Both agree on every
-    # derivative-affecting field, so the retry must stay metadata-only —
+    # derivative-affecting field, so the retry must stay metadata-only,
     # escalating to replace here would rebuild the whole graph for a label.
     old = record_for(make_spec(label="old label"))
     spec = make_spec(label="new label")

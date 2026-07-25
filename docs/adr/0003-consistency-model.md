@@ -1,4 +1,4 @@
-# ADR-0003: Consistency model — at-least-once, idempotent, eventually convergent
+# ADR-0003: Consistency model (at-least-once, idempotent, eventually convergent)
 
 Status: accepted · Date: 2026-07-24
 
@@ -14,7 +14,7 @@ CogneeTargetState = F(
 
 After any finite sequence of declare/update/delete operations and any number
 of *recoverable* failures, retrying synchronization must converge to the state
-`F` prescribes — no stale documents, no orphaned derivatives, no duplicates.
+`F` prescribes, no stale documents, no orphaned derivatives, no duplicates.
 
 ## Why cross-system ACID is impossible
 
@@ -52,12 +52,12 @@ promising atomicity would be lying.
 ## Convergence argument
 
 Let `D` be the desired state. After any failure, the persisted tracking state
-either (a) equals `D` and is confirmed — retry is a no-op; or (b) records
-uncertainty — retry replays an idempotent sequence whose *post-state is `D`
+either (a) equals `D` and is confirmed: retry is a no-op; or (b) records
+uncertainty: retry replays an idempotent sequence whose *post-state is `D`
 regardless of the actual Cognee state within the uncertainty set*. Each
 successful retry strictly shrinks the uncertainty set (CocoIndex commits
 collapse multi-state tracking), and no step widens it. Hence finitely many
-retries reach (a). The fault-injection matrix (`tests/` — nine injection
+retries reach (a). The fault-injection matrix (`tests/`, nine injection
 points, two-worker contention) exists to demonstrate exactly this property,
 not merely to exercise error paths.
 
@@ -72,7 +72,7 @@ not merely to exercise error paths.
 - `verify()` exists to detect residual drift (external mutation, operator
   error) that the model cannot prevent, e.g. a human deleting Cognee data
   behind the connector's back. It compares presence, identity, completion
-  and label — **not** whether derivatives match current content, so stale or
+  and label, but **not** whether derivatives match current content, so stale or
   absent derivatives under an otherwise healthy row are invisible to it.
 - Losing the tracking store is outside the convergence argument: uncertainty
   the engine *records* is replayed conservatively, but uncertainty that is

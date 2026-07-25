@@ -1,7 +1,7 @@
 """Benchmark harness: environment fingerprinting, metrics, report writing.
 
 Reports are machine-specific by nature. They are written to
-``benchmarks/reports/`` (gitignored) and are never quoted in the README —
+``benchmarks/reports/`` (gitignored) and are never quoted in the README,
 regenerate locally to compare like with like.
 """
 
@@ -97,17 +97,17 @@ def write_report(
     json_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
 
     lines = [
-        f"# cogindex benchmark report — {env['timestamp_utc']}",
+        f"# cogindex benchmark report: {env['timestamp_utc']}",
         "",
         "> Machine-specific numbers. Regenerate locally; never compare across",
         "> machines or quote in documentation. Mode "
         f"`{env['mode']}`: "
         + (
-            "connector layer over an in-memory fake Cognee — measures cogindex "
+            "connector layer over an in-memory fake Cognee: measures cogindex "
             "+ engine overhead, not Cognee."
             if env["mode"] == "fake"
             else "real local Cognee stack with deterministic LLM/embedding "
-            "substitutes — measures the full local pipeline without model "
+            "substitutes: measures the full local pipeline without model "
             "latency."
         ),
         "",

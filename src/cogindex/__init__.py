@@ -4,7 +4,7 @@ into Cognee knowledge graphs.
 cogindex is a CocoIndex custom target connector: CocoIndex owns target-state
 declaration, change detection, ownership and deletion; Cognee owns ingestion,
 cognify, the knowledge graph and retrieval. cogindex provides what neither
-does alone — stable document identity, idempotent writes, in-place content
+does alone: stable document identity, idempotent writes, in-place content
 replacement, configuration invalidation, deletion, and convergence after
 failure (see docs/adr/).
 """

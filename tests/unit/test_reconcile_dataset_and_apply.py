@@ -7,7 +7,7 @@ invalidation, ownership-aware deletion, and key validation.
 Part B drives ``DocumentHandler._apply`` directly over a
 :class:`FakeCogneeRuntime`, with actions produced by real ``reconcile()``
 calls, asserting the ADR-0004 batch protocol: deletes, then purges, then one
-batched add, then a single incremental cognify — all under the dataset lock,
+batched add, then a single incremental cognify: all under the dataset lock,
 which is released even on failure.
 """
 
@@ -35,7 +35,7 @@ from cogindex._target import DatasetHandler, DocumentHandler, _DocumentAction
 from cogindex.testing import FakeCogneeRuntime, InjectedFault
 
 # =============================================================================
-# Part A — DatasetHandler.reconcile (pure, no I/O)
+# Part A: DatasetHandler.reconcile (pure, no I/O)
 # =============================================================================
 
 _KEY = ("rt", "default", "ds")
@@ -140,7 +140,7 @@ def test_bad_dataset_keys_raise_type_error() -> None:
 
 
 # =============================================================================
-# Part B — DocumentHandler._apply batching over FakeCogneeRuntime
+# Part B: DocumentHandler._apply batching over FakeCogneeRuntime
 # =============================================================================
 
 _RUNTIME_KEY = "rt"

@@ -2,8 +2,8 @@
 
 Verifies the cross-process guarantees the in-process provider cannot give:
 mutual exclusion between independent providers (as two updater processes
-would be), release on scope exit, and — the reason advisory locks were
-chosen — automatic release when the holding session dies without unlocking.
+would be), release on scope exit, and, the reason advisory locks were
+chosen: automatic release when the holding session dies without unlocking.
 
 Database resolution order: ``POSTGRES_DSN`` env var (CI service container),
 then testcontainers (local Docker), else skip with the reason recorded.
@@ -99,7 +99,7 @@ async def test_session_death_releases_lock_without_unlock(pg_dsn: str) -> None:
 
     survivor = _provider(pg_dsn, timeout=5)
     async with survivor.lock(scope):
-        pass  # acquirable again — the dead session's lock was auto-released
+        pass  # acquirable again, the dead session's lock was auto-released
 
 
 async def test_distinct_scopes_do_not_contend(pg_dsn: str) -> None:

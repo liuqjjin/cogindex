@@ -29,7 +29,7 @@ relative to the cocoindex repo root.
   callback `(context_provider, actions, /)`. Container sinks must return a
   `ChildTargetDef | None` per action, same length and order (enforced:
   `execution.rs:1642`, `target_state.rs:176`). Sink callables are deduped via
-  `WeakValueDictionary`, so equal shared sinks collapse into one batcher —
+  `WeakValueDictionary`, so equal shared sinks collapse into one batcher,
   prefer module-level or per-instance sinks created once.
 - Registration: `register_root_target_states_provider(name, handler)`
   (`target_state.py:305`) wraps the handler so tracking records are
@@ -55,7 +55,7 @@ Next-run semantics after a failure: the item carries multiple
 `prev_possible_records`. `prev_may_be_missing=True` is forced when a `Deleted`
 marker or pending state is present, on provider schema-version mismatch, on
 full reprocess, or when there is no previous item at all (:926-943, :1100-04).
-Two live values without a delete marker keep `prev_may_be_missing=False` — the
+Two live values without a delete marker keep `prev_may_be_missing=False`: the
 handler's own record comparison must decide. Pinned by
 `python/tests/core/test_component_target_states.py::test_prev_may_be_missing_after_failed_update`
 and `::test_proceed_with_failed_creation`.
@@ -68,9 +68,9 @@ and `::test_proceed_with_failed_creation`.
   declare time. Reference implementations:
   `python/cocoindex/connectors/sqlite/_target.py` (table→row),
   `localfs/_target.py` (dir→file), `postgres/_target.py`.
-- `child_invalidation="destructive"` mints a new provider generation — all
+- `child_invalidation="destructive"` mints a new provider generation: all
   prior child tracking is ignored (rebuild). `"lossy"` bumps the provider
-  schema version — every child sees `prev_may_be_missing=True` (conservative
+  schema version: every child sees `prev_may_be_missing=True` (conservative
   replay). Derivation pattern via statediff:
   `sqlite/_target.py:999-1020`. Tests:
   `python/tests/core/test_provider_generation.py`.
@@ -87,7 +87,7 @@ and `::test_proceed_with_failed_creation`.
   semantics (user-managed short-circuits cleanup).
 - `connectorkits/fingerprint.py`: `fingerprint_bytes/str/object` (memo-key
   based canonical fingerprints).
-- `connectorkits/target.py` contains only `ManagedBy` — nothing else.
+- `connectorkits/target.py` contains only `ManagedBy` and nothing else.
 - Reusable DB-free test harness: `python/tests/common/target_states.py`
   (`DictTargetStateStore`, two-level `DictsTargetStateStore`,
   `AttachmentDictsTargetStateStore`, `Metrics`, `sink_exception` fault flag).
@@ -112,7 +112,7 @@ and `::test_proceed_with_failed_creation`.
    (`TargetStateProvider.attachment`). The `.mdx` doc and all shipped
    connectors use the plural form.
 2. SKILL.md references docs paths under `docs/docs/...` and `docs/sidebars.ts`
-   (Docusaurus); the repo migrated to Astro — real docs live under
+   (Docusaurus); the repo migrated to Astro, and real docs live under
    `docs/src/content/docs/**.mdx`, and connector sources are `_target.py`,
    not `target.py`.
 3. No dedicated statediff unit-test file exists; statediff is covered

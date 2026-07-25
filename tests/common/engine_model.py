@@ -12,10 +12,10 @@ contract (docs/upstream-audit/cocoindex/findings.md):
   (``python/tests/core/test_component_target_states.py``):
 
   * **failed creation** (nothing was ever committed) surfaces *no* possible
-    records and ``prev_may_be_missing=True`` — the sink may hold anything or
+    records and ``prev_may_be_missing=True``, the sink may hold anything or
     nothing (``test_proceed_with_failed_creation``);
   * **failed update** (a committed record plus the intent that failed)
-    surfaces *both* records with ``prev_may_be_missing=False`` — the sink is
+    surfaces *both* records with ``prev_may_be_missing=False``, the sink is
     guaranteed to hold one of them
     (``test_prev_may_be_missing_after_failed_update``).
 
@@ -141,11 +141,11 @@ class EmulatedEngine:
         place for :meth:`reconcile_round` to interpret. That interpretation
         follows the two engine transitions pinned upstream (see the module
         docstring); it is not a claim that every engine-internal detail is
-        reproduced — the real engine is exercised in
+        reproduced, the real engine is exercised in
         tests/unit/test_engine_lifecycle.py.
 
         If the apply happened to succeed (the faulted op never ran in this
-        batch), the honest engine step is to commit — done here — and False
+        batch), the honest engine step is to commit: done here, and False
         is returned.
         """
         outputs = self.reconcile_round(declared)

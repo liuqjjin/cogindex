@@ -1,7 +1,7 @@
 """Drift verification: does actual Cognee state match declared expectations?
 
 ``verify_dataset`` derives the same stable identities the target would and
-compares them against what the runtime actually stores — surfacing missing
+compares them against what the runtime actually stores, surfacing missing
 documents, foreign/stale documents, incomplete cognify runs, and label
 drift. Read-only: it never repairs anything (re-running the flow is the
 repair; ADR-0003's convergence property is what makes that safe).
@@ -86,7 +86,7 @@ async def verify_dataset(
     """Compare declared expectations against the runtime's actual state.
 
     ``runtime_key`` must be the same ContextKey (or key string) the dataset
-    target was declared with — it participates in every document identity.
+    target was declared with, since it participates in every document identity.
     """
     key_string = runtime_key.key if isinstance(runtime_key, coco.ContextKey) else runtime_key
     expected_by_id: dict[uuid.UUID, ExpectedDocument] = {
@@ -118,7 +118,7 @@ async def verify_dataset(
                     data_id=data_id,
                     external_key=None,
                     detail=(
-                        "document not among expectations — foreign data or "
+                        "document not among expectations: foreign data or "
                         "stale state from an interrupted run"
                     ),
                 )

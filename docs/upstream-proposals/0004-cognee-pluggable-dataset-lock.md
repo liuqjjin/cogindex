@@ -7,8 +7,8 @@
 
 Cognee's per-dataset write serialization is a **process-local**
 `asyncio.Lock` (the code carries an explicit TODO acknowledging it should be
-replaced with a distributed mechanism). Two updater processes — or one
-library user plus one served API worker — can interleave
+replaced with a distributed mechanism). Two updater processes, or one
+library user plus one served API worker, can interleave
 add/cognify/forget on the same dataset. The pipeline layers are individually
 retry-safe, but concurrent cognify runs over the same items duplicate LLM
 work and can interleave graph writes in ways single-process users never see.
@@ -32,7 +32,7 @@ localized.
 ## What cogindex does today
 
 cogindex wraps its own batch application (deletes → purges → add → cognify)
-in a `LockProvider` scope — in-process by default,
+in a `LockProvider` scope: in-process by default,
 `PostgresAdvisoryLockProvider` for multi-process updaters (ADR-0006). That
 protects cogindex-driven writes against each other, but cannot protect
 against non-cogindex writers inside Cognee itself; only an upstream hook

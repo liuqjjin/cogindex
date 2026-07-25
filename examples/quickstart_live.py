@@ -2,14 +2,14 @@
 
 CocoIndex watches the folder and owns change detection; cogindex maps every
 file onto a stable Cognee document; Cognee builds the knowledge graph.
-Add, edit, or delete files and re-run (or use --live): the graph follows —
+Add, edit, or delete files and re-run (or use --live): the graph follows,
 edits replace in place, deletions clean up derivatives.
 
 Usage:
     # with a configured LLM (see .env.example):
     python examples/quickstart_live.py ./my-docs --search "what is X?"
 
-    # without any LLM key — deterministic demo substitutes:
+    # without any LLM key (deterministic demo substitutes):
     python examples/quickstart_live.py ./my-docs --deterministic
 
     # watch continuously (Ctrl+C to stop):
@@ -54,15 +54,15 @@ def document_key(path: pathlib.Path, folder_root: pathlib.Path) -> str:
     """Stable identity for one file: its path relative to the watched folder.
 
     Deriving it in one place is the point. Identity must not depend on how the
-    folder was spelled on the command line — a relative `./my-docs` and an
+    folder was spelled on the command line, a relative `./my-docs` and an
     absolute `/home/me/my-docs` are the same folder and must produce the same
-    document keys — and the declaration side and the verification side must
+    document keys, and the declaration side and the verification side must
     never derive it differently, or every document reads as both missing and
     unexpected. ``resolve()`` both sides: /tmp vs /private/tmp style symlinks
     would otherwise make ``relative_to()`` fail.
 
     ``resolve()`` stats the filesystem, so callers inside async code block
-    briefly — one stat per file, which is fine for an example.
+    briefly: one stat per file, which is fine for an example.
     """
     return path.resolve().relative_to(folder_root).as_posix()
 
@@ -158,7 +158,7 @@ async def main() -> None:
     mock_context = deterministic_llm() if args.deterministic else contextlib.nullcontext()
     with mock_context:
         if args.live:
-            print(f"\nwatching {args.folder} — edit files, Ctrl+C to stop")
+            print(f"\nwatching {args.folder}. Edit files, Ctrl+C to stop")
             await app.update(live=True).result()
             return
         await app.update().result()

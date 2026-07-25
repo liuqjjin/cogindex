@@ -8,7 +8,7 @@ This is the heart of cogindex (ADR-0003/0004/0005):
 - :class:`DocumentHandler` reconciles individual documents into idempotent
   write ops (upsert / replace / update_metadata / delete) and applies them in
   batches: hard deletes, then derivative purges, then one batched add, then a
-  single incremental cognify — under the dataset lock.
+  single incremental cognify, all under the dataset lock.
 
 ``reconcile()`` implementations are synchronous and perform no I/O (the
 engine calls them under a lock); every external call lives in action sinks.
@@ -83,7 +83,7 @@ def _classify_write(
 
     "update_metadata" (re-add without purging derivatives) is only safe when
     every possible previous record matches the desired record on all
-    derivative-affecting fields AND no record may be missing — a missing
+    derivative-affecting fields AND no record may be missing. A missing
     record could mean the last cognify never completed, or that a torn delete
     took the derivatives, so the full replace sequence must run instead.
     """
@@ -115,10 +115,10 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
     """Handler for one dataset's documents.
 
     Instances are created by the dataset sink with the connection already
-    resolved: they hold the runtime object, never a context key — child
+    resolved: they hold the runtime object, never a context key, so child
     reconciles and sinks do not touch the ContextProvider. The action sink is
     a bound method, so the engine batches actions per handler instance, i.e.
-    per dataset — which is exactly the batching unit cognify wants.
+    per dataset, which is exactly the batching unit cognify wants.
     """
 
     __slots__ = (
@@ -282,7 +282,7 @@ _DatasetTrackingRecord: TypeAlias = statediff.MutualTrackingRecord[DatasetConfig
 
 
 class _DatasetKey(NamedTuple):
-    """Root target key. ``runtime_key`` is the ContextKey string — part of
+    """Root target key. ``runtime_key`` is the ContextKey string, part of
     every document's identity, so renaming it renames every document."""
 
     runtime_key: str
@@ -343,7 +343,7 @@ class DatasetHandler(
         main_action = statediff.diff(resolved)
 
         # Config change: every document's derivatives are stale, but raw data
-        # survives — "lossy", not "destructive". Children additionally carry
+        # survives: "lossy", not "destructive". Children additionally carry
         # the processing fingerprint in their own records (ADR-0005's dual
         # mechanism), so either signal alone forces the rebuild.
         child_invalidation: Literal["destructive", "lossy"] | None = (
@@ -459,9 +459,9 @@ class DatasetTarget(Generic[coco.MaybePendingS], coco.ResolvesTo["DatasetTarget"
             external_key: stable logical identifier (e.g. relative path or
                 source record id). Never derive it from content.
             content: document text or bytes.
-            label / external_metadata: benign metadata — changes re-add the
+            label / external_metadata: benign metadata; changes re-add the
                 document without rebuilding graph derivatives.
-            node_set / importance_weight: derivative-affecting annotations —
+            node_set / importance_weight: derivative-affecting annotations;
                 changes trigger purge + re-cognify (ADR-0005).
         """
         spec = CogneeDocumentSpec(
@@ -496,7 +496,7 @@ def dataset_target(
     Args:
         runtime: ContextKey (or its key string) under which a
             :class:`CogneeRuntime` is provided. The key string is part of
-            every document's stable identity — renaming it renames every
+            every document's stable identity. Renaming it renames every
             managed document (ADR-0002).
         name: Cognee dataset name.
         profile: cognify parameters for this dataset.

@@ -2,7 +2,7 @@
 
 For multiple updater processes sharing one Cognee deployment. Session-scoped
 ``pg_advisory_lock``: if the holding connection dies, PostgreSQL releases the
-lock — no stale-lock janitor needed.
+lock, so nothing has to sweep up stale ones.
 
 Requires the ``postgres`` extra: ``pip install cogindex[postgres]``.
 """

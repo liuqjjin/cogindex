@@ -4,11 +4,11 @@ Two documents mention the same organization. Watch what happens to the
 knowledge graph as documents are replaced and deleted:
 
 1. bob.md ("Bob works for SharedOrg and AlphaCorp") and carol.md ("Carol
-   works for SharedOrg") are synced — the graph contains all entities.
-2. bob.md is edited to mention BetaCorp instead — AlphaCorp disappears
+   works for SharedOrg") are synced, the graph contains all entities.
+2. bob.md is edited to mention BetaCorp instead: AlphaCorp disappears
    (its only supporting document changed), BetaCorp appears, and SharedOrg
    survives because carol.md still references it.
-3. carol.md is removed — SharedOrg loses its last reference and disappears.
+3. carol.md is removed: SharedOrg loses its last reference and disappears.
 
 Nothing here is cogindex deleting graph nodes by hand: every removal flows
 through Cognee's provenance-aware deletion planner. cogindex's contribution
@@ -164,7 +164,7 @@ async def main() -> None:
             {"bob.md": "Bob works for BetaCorp."},
         )
 
-    print("\ndone — storage was", storage)
+    print("\ndone: storage was", storage)
 
 
 if __name__ == "__main__":

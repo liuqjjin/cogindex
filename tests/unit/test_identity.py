@@ -19,7 +19,7 @@ from cogindex._identity import (
     normalize_external_key,
 )
 
-# NFC and NFD spellings of "café" — distinct code-point sequences on purpose.
+# NFC and NFD spellings of "café": distinct code-point sequences on purpose.
 _CAFE_NFC = "café"
 _CAFE_NFD = "café"
 
@@ -79,14 +79,14 @@ class TestCogindexNamespace:
         assert uuid.uuid5(uuid.NAMESPACE_DNS, "cogindex") == COGINDEX_NAMESPACE
 
     def test_golden_literal(self) -> None:
-        # Identity-stability golden — this value must NEVER change; changing
+        # Identity-stability golden. This value must NEVER change; changing
         # it renames every managed document.
         assert uuid.UUID("427dd96a-c6b7-5e1b-b82f-a0fbc923770f") == COGINDEX_NAMESPACE
 
 
 class TestDocumentDataId:
     def test_golden_literals(self) -> None:
-        # Identity-stability goldens — computed once and hardcoded; these
+        # Identity-stability goldens: computed once and hardcoded; these
         # values must NEVER change (a change renames every managed document).
         assert document_data_id("rt-primary", "tenant-a", "docs", "guide/intro.md") == uuid.UUID(
             "f52de54d-d400-5dea-b331-e6cee711c324"

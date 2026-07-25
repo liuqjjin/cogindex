@@ -6,7 +6,7 @@ Status: accepted · Date: 2026-07-24
 
 Cognee's incremental gate checks a single per-item status
 (`pipeline_status[pipeline][dataset_id] == COMPLETED`). It carries **no
-fingerprint of the prompt, graph model, chunker, LLM, or embedding model** —
+fingerprint of the prompt, graph model, chunker, LLM, or embedding model**,
 changing any of these upstream re-processes nothing. Derivative correctness
 under configuration change is therefore entirely this connector's job.
 
@@ -39,7 +39,7 @@ Two invalidation mechanisms are used **together**:
    `forget(memory_only=True)`, re-add, re-cognify).
 2. **Dataset-level:** when the dataset spec's processing configuration
    changes, the dataset handler also returns `child_invalidation="lossy"`,
-   which makes the engine pass `prev_may_be_missing=True` to every child —
+   which makes the engine pass `prev_may_be_missing=True` to every child,
    forcing conservative replay even for documents whose tracking records the
    engine can no longer trust.
 

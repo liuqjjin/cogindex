@@ -13,19 +13,19 @@ tracked file, *what it is* and *how deeply it was reviewed*, so the claim
 
 ## Layout
 
-- `tools/generate_inventory.py` — regenerates the mechanical inventory from a
+- `tools/generate_inventory.py`: regenerates the mechanical inventory from a
   clone (`git ls-files` + classification rules + LOC + blob hashes).
-- `cocoindex/inventory.jsonl`, `cognee/inventory.jsonl` — one record per
+- `cocoindex/inventory.jsonl`, `cognee/inventory.jsonl`: one record per
   tracked file: path, language, LOC, blob hash, module, category
   (`first-party source` / `test` / `build/CI` / `docs/example` /
   `generated/vendor/binary` / `irrelevant` with reason), audit status,
   relevance, notes.
-- `cocoindex/summary.md`, `cognee/summary.md` — roll-ups by category/module.
-- `cocoindex/review-state.jsonl`, `cognee/review-state.jsonl` — hand-maintained
+- `cocoindex/summary.md`, `cognee/summary.md`: roll-ups by category/module.
+- `cocoindex/review-state.jsonl`, `cognee/review-state.jsonl`: hand-maintained
   review results merged over the mechanical inventory: per file or per module,
   `audit_status ∈ {reviewed-deep, reviewed-skim, classified-only}`, relevance
   to this connector, and risk notes.
-- `cocoindex/findings.md`, `cognee/findings.md` — the semantic audit: what the
+- `cocoindex/findings.md`, `cognee/findings.md`, the semantic audit: what the
   state machinery actually does, with file/line references, and every place
   upstream documentation disagreed with upstream code.
 
@@ -35,7 +35,7 @@ tracked file, *what it is* and *how deeply it was reviewed*, so the claim
    the rules are in the generator.
 2. Files on the connector's critical path (target-state engine, ingestion,
    deletion/provenance, pipeline status, locking, config) were read in full
-   ("reviewed-deep"), including their tests — test assertions are treated as
+   ("reviewed-deep"), including their tests: test assertions are treated as
    the authoritative statement of upstream semantics.
 3. Adjacent modules were skimmed for interface shape ("reviewed-skim").
 4. Everything else is "classified-only": identified, categorized, and judged
@@ -49,6 +49,6 @@ tracked file, *what it is* and *how deeply it was reviewed*, so the claim
    wheel could diverge, the wheel is what cogindex runs against and wins.
 
 The release gate requires every first-party source file to carry an explicit
-status — either directly or via a module-scoped entry in `review-state.jsonl`
+status: either directly or via a module-scoped entry in `review-state.jsonl`
 whose path prefix covers it; "we read everything deeply" is not claimed
 anywhere.
