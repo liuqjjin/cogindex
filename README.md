@@ -146,14 +146,14 @@ pip install git+https://github.com/liuqjjin/cogindex
 
 Python 3.11 到 3.13，Linux 与 macOS。依赖区间 `cocoindex >=1.0.18,<2`、`cognee >=1.4.0,<1.5`。
 
-两个上游都在固定的提交上做过通读审计，提交号记录在 [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json)。上游每一个第一方源码文件都在[审计台账](docs/upstream-audit/)里标了明确的审阅状态，这一点由 CI 机器校验；审计过程中发现的四处缺口写成了[改进提案](docs/upstream-proposals/)。
+两个上游都在固定的提交上做过分级源码审计，提交号记录在 [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json)。审计不声称把两个仓库读完了：关键路径的文件连同它们的测试逐行精读，邻近模块只看接口形状，其余归档分类并记录判断理由。价值在于**可核查**，上游每一个第一方源码文件都在[审计台账](docs/upstream-audit/)里带有明确的审阅等级，覆盖完整性由 CI 机器校验。审计发现的四处缺口写成了[改进提案](docs/upstream-proposals/)。
 
 ## 目录
 
 ```
 src/cogindex/          连接器本体，公开 API 在 __init__ 里再导出
 docs/adr/              七份决策记录，建议从 0003 和 0004 读起
-docs/upstream-audit/   两个上游的通读审计台账
+docs/upstream-audit/   两个上游的分级源码审计台账
 docs/benchmarks.md     测量结果、所用机器、复现命令
 tests/{unit,property,integration}
 benchmarks/            七类基准测试

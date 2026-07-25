@@ -203,11 +203,15 @@ pip install git+https://github.com/liuqjjin/cogindex
 Python 3.11 to 3.13, Linux and macOS. Dependency ranges
 `cocoindex >=1.0.18,<2` and `cognee >=1.4.0,<1.5`.
 
-Both upstreams were read through and audited at fixed commits recorded in
-[`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json). Every first-party upstream source
-file carries an explicit review status in the
-[audit ledger](docs/upstream-audit/), machine-checked in CI, and the four gaps
-that audit turned up are written up as
+Both upstreams were audited at fixed commits recorded in
+[`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json). The audit does not claim to have
+read either repository end to end: files on the critical path were read in full
+along with their tests, adjacent modules were skimmed for interface shape, and
+the rest was classified with the reasoning recorded. What makes it worth
+anything is that it is **checkable**, since every first-party upstream source
+file carries an explicit review level in the
+[audit ledger](docs/upstream-audit/) and the completeness of that coverage is
+machine-checked in CI. The four gaps it turned up are written up as
 [proposals](docs/upstream-proposals/).
 
 ## Layout
@@ -215,7 +219,7 @@ that audit turned up are written up as
 ```
 src/cogindex/          the connector; public API re-exported in __init__
 docs/adr/              seven decision records, start with 0003 and 0004
-docs/upstream-audit/   read-through audit ledger for both upstreams
+docs/upstream-audit/   tiered source-audit ledger for both upstreams
 docs/benchmarks.md     results, the machine, reproduction commands
 tests/{unit,property,integration}
 benchmarks/            seven benchmark categories
