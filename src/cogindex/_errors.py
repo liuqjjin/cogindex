@@ -6,7 +6,6 @@ __all__ = [
     "CogindexError",
     "CompatibilityError",
     "LockTimeoutError",
-    "UnsupportedCapabilityError",
 ]
 
 
@@ -16,10 +15,6 @@ class CogindexError(Exception):
 
 class CompatibilityError(CogindexError):
     """The installed cognee/cocoindex lacks a capability cogindex requires."""
-
-
-class UnsupportedCapabilityError(CogindexError):
-    """The configured runtime cannot support the requested operation."""
 
 
 class LockTimeoutError(CogindexError):

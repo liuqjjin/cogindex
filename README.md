@@ -65,9 +65,11 @@ Known limitations (upstream-constrained, documented not papered over):
 
 - Emptying a dataset on unmount leaves the (empty) dataset row — Cognee has
   no public dataset-row delete API.
-- `RemoteCogneeRuntime` write support does not exist: Cognee's REST add
-  accepts no `data_id`, so stable identity is impossible over HTTP today
-  ([proposal](docs/upstream-proposals/0002-cognee-rest-add-data-id.md)).
+- Cognee must run in-process. There is no REST-backed runtime, because
+  Cognee's REST add accepts no `data_id` and stable identity is the
+  foundation of everything else here
+  ([proposal](docs/upstream-proposals/0002-cognee-rest-add-data-id.md),
+  [ADR-0007](docs/adr/0007-runtime-abstraction.md)).
 - `verify_dataset` compares presence/identity/completion/label, not raw
   content or metadata (Cognee stores those in storage-specific envelopes).
 - Unmounting a `managed_by="user"` dataset leaves *everything* in it,
@@ -78,8 +80,8 @@ Known limitations (upstream-constrained, documented not papered over):
 
 | Tier | What runs | Command |
 |---|---|---|
-| unit (123 tests) | reconcile decision matrix, identity goldens, 9-scenario deterministic fault matrix, lock serialization, false-success guards — no services | `make test` |
-| property | Hypothesis state machine: random interleavings of declare/remove/config-change/sync/crash against an emulation of the engine's precommit→apply→commit contract; validated by mutation testing (disabling the purge phase or the lock makes it fail) | `make test-property` |
+| unit | reconcile decision matrix, identity goldens, 11-scenario deterministic fault matrix, lock serialization, false-success guards, compatibility surface — no services | `make test` |
+| property | Hypothesis state machine: random interleavings of declare/remove/config-change/sync/crash against an emulation of the engine's precommit→apply→commit contract. Mutation-validated: no-op the derivative purge, or misclassify a replace as metadata-only, and it fails. Removing the dataset lock does *not* fail this tier (correctness never depended on the lock); that regression is caught by the unit fault matrix instead | `make test-property` |
 | integration | **real local Cognee** (SQLite + LanceDB + embedded graph) with deterministic LLM/embedding substitutes — replace protocol and shared-entity provenance asserted at the graph level; the incremental gate proven by LLM call counts | `make test-integration` |
 | integration_llm | opt-in, real LLM end to end (`COGINDEX_RUN_LLM_TESTS=1` + key) | `make test-llm` |
 | postgres | advisory-lock semantics incl. crash-release, against a real PostgreSQL (CI service container or Docker) | `make test-postgres` |
@@ -119,12 +121,14 @@ python -m benchmarks.run --profile default          # connector layer (in-memory
 python -m benchmarks.run --profile smoke --mode real  # real local stack, deterministic substitutes
 ```
 
-Six categories: initial ingest, incremental update (with a hard
-`wasted_writes == 0` check), freshness percentiles, deletion correctness,
-crash recovery, verification reads. Reports (JSON + Markdown, with a full
-environment fingerprint) land in the gitignored `benchmarks/reports/`.
-This README quotes no numbers on purpose: they are machine-specific —
-regenerate locally.
+Categories: baseline comparison against a naive integration, initial ingest,
+incremental update, freshness percentiles, deletion correctness, crash
+recovery, verification reads. Reports land in the gitignored
+`benchmarks/reports/` as JSON and Markdown with a full environment
+fingerprint.
+
+See [docs/benchmarks.md](docs/benchmarks.md) for results, the machine they
+were measured on, and what each number does and does not mean.
 
 ## Install & compatibility
 
@@ -132,8 +136,8 @@ regenerate locally.
 pip install cogindex            # not yet published; from source: pip install .
 ```
 
-Python 3.11–3.14. Pinned upstream ranges: `cocoindex >=1.0.18,<2`,
-`cognee >=1.4.0,<1.5`. The audited upstream commits are locked in
+Python 3.11 to 3.13, tested on Linux and macOS. Pinned upstream ranges:
+`cocoindex >=1.0.18,<2`, `cognee >=1.4.0,<1.5`. The audited upstream commits are locked in
 [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json); every first-party upstream file
 carries an explicit review status in the
 [audit ledger](docs/upstream-audit/) (machine-checked by

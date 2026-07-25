@@ -3,7 +3,8 @@
 UV ?= uv
 
 .PHONY: setup lint format typecheck test test-property test-integration \
-        test-postgres test-llm smoke benchmark-smoke build ci clean upstream-lock
+        test-postgres test-llm coverage audit smoke benchmark-smoke build ci \
+        clean upstream-lock
 
 setup:            ## Install the dev environment
 	$(UV) sync --all-extras
@@ -34,6 +35,14 @@ test-llm:         ## Opt-in: real LLM provider (requires LLM_API_KEY)
 test-postgres:    ## PostgreSQL advisory-lock tests (Docker/testcontainers or POSTGRES_DSN)
 	$(UV) run pytest tests/integration -q -m postgres
 
+coverage:         ## Line+branch coverage over the unit and property tiers
+	$(UV) run coverage run -m pytest tests/unit tests/property -q
+	$(UV) run coverage report
+	$(UV) run coverage xml
+
+audit:            ## Every upstream first-party file carries a review status
+	$(UV) run python docs/upstream-audit/tools/check_coverage.py
+
 smoke:            ## Build wheel and import it in a clean venv
 	scripts/smoke_install.sh
 
@@ -43,7 +52,7 @@ benchmark-smoke:  ## Tiny benchmark run to validate the harness end to end
 build:            ## Build sdist + wheel
 	$(UV) build
 
-ci: lint typecheck test test-property   ## What the required CI job runs
+ci: lint typecheck audit test test-property   ## What the required CI job runs
 
 upstream-lock:    ## Regenerate UPSTREAM_LOCK.json + audit inventories from .upstream/ clones
 	$(UV) run python docs/upstream-audit/tools/generate_inventory.py .upstream/cocoindex docs/upstream-audit/cocoindex --name cocoindex

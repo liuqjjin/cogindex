@@ -35,19 +35,31 @@ search, and a dataset-scoped lock hook.
 - **`FakeCogneeRuntime`** (tests): deterministic in-memory reference
   implementation with injectable fault points; the contract test suite runs
   against both Fake and Local to keep them honest.
-- **`RemoteCogneeRuntime`** (experimental, read/verify only): may resolve
-  datasets, list data, and search against a Cognee server. Every write-path
-  method raises `UnsupportedCapabilityError` at *configuration* time — fail
-  fast, not at first write. We do not emulate stable ids by stuffing them
-  into metadata: identity faked in metadata is invisible to Cognee's
-  provenance and deletion planner, which would silently break replace and
-  delete. The write path opens only if/when upstream accepts an explicit
-  `data_id` on the add endpoint (see `docs/upstream-proposals/`).
+
+### No remote runtime in 0.1
+
+There is deliberately no REST-backed runtime. A read-only one would be easy
+and a writing one would be wrong, so shipping the read-only half alone would
+mostly serve to advertise a capability that cannot be completed:
+
+- The write path is blocked upstream, not by us. `POST /v1/add` accepts no
+  caller-supplied data id, so every re-ingestion of edited content creates a
+  new server-side document instead of replacing the old one. Stable identity
+  is the foundation of everything else here (ADR-0002), so a REST writer
+  would not be a degraded connector, it would be a broken one.
+- Faking identity in metadata is not an option. Cognee's provenance and
+  deletion planner key on the real `data_id`; an id smuggled into metadata is
+  invisible to them, which would silently break both replace and delete
+  while appearing to work.
+
+The path opens if upstream accepts an explicit `data_id` on the add
+endpoint, which is filed as `docs/upstream-proposals/0002`.
 
 ## Consequences
 
-- Users get one supported, fully-featured path (local SDK) and one clearly
-  fenced experimental path, instead of a REST mode that corrupts on write.
-- Upgrading Cognee changes exactly one module; compatibility tests pin the
-  imported surface so a breaking upstream change fails loudly in CI
+- One supported path instead of two half-paths. `LocalCogneeRuntime` requires
+  the caller to run Cognee in-process, which is the honest cost of stable
+  identity today.
+- Upgrading Cognee changes exactly one module. `tests/unit/test_compat.py`
+  pins the imported surface, so a breaking upstream change fails in CI
   (including the nightly upstream-compatibility job) rather than at runtime.

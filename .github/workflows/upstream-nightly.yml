@@ -2,7 +2,9 @@ name: Upstream compatibility (nightly)
 
 # Detects breaking changes in cocoindex/cognee ahead of user reports:
 # installs the newest released upstreams (ignoring our lockfile) and runs the
-# compat + unit + deterministic-integration suites.
+# unit suite (which includes the compatibility-surface tests) plus the
+# deterministic integration tier, where behavior changes that signatures
+# cannot reveal actually surface.
 
 on:
   schedule:

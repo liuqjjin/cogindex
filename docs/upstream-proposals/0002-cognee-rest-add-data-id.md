@@ -32,6 +32,8 @@ Validation: reject malformed UUIDs with 422; behavior with a provided
 
 ## What cogindex does today
 
-`RemoteCogneeRuntime` is deliberately read/verify-only: its write path fails
-fast at configuration time (ADR-0007) rather than silently producing
-duplicate documents. This proposal is what would unlock remote writes.
+cogindex ships no REST-backed runtime at all. Its `CogneeRuntime` protocol has
+exactly one supported implementation, which drives the Python library
+in-process, and users who only have a served Cognee are told the integration
+does not support them yet rather than being handed a writer that silently
+duplicates documents (ADR-0007). This proposal is the blocker.

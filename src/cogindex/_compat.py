@@ -62,6 +62,7 @@ class CogneeCompat:
     # behavior of the installed version.
     default_graph_model: type[Any] | None
     default_chunker: type[Any] | None
+    default_chunk_size: int | None
 
 
 @functools.cache
@@ -127,6 +128,7 @@ def load() -> CogneeCompat:
         dataset_missing_errors=_dataset_missing_errors(),
         default_graph_model=_signature_default_type(cognee.cognify, "graph_model"),
         default_chunker=_signature_default_type(cognee.cognify, "chunker"),
+        default_chunk_size=_signature_default_int(cognee.cognify, "chunk_size"),
     )
 
 
@@ -143,15 +145,19 @@ def configure_storage(data_root: str | None, system_root: str | None) -> None:
         cognee.config.system_root_directory(system_root)
 
 
-def configured_models() -> tuple[str | None, str | None]:
-    """Best-effort read of the globally configured (llm, embedding) models.
+def configured_models() -> tuple[str | None, str | None, int | None]:
+    """Best-effort read of the globally configured models and vector width.
 
-    These live in cognee's env config, not in cognify() arguments, but they
-    shape every derivative — so they belong in processing fingerprints
-    (ADR-0005). Returns None entries when the config modules move.
+    Returns ``(llm_model, embedding_model, embedding_dimensions)``. These live
+    in cognee's env config rather than in cognify() arguments, but they shape
+    every derivative, so they belong in processing fingerprints (ADR-0005).
+    Dimensions are read separately because they are settable independently of
+    the model: the same embedding model at a different width invalidates every
+    stored vector. Entries are None when the config layout moves.
     """
     llm_model: str | None = None
     embedding_model: str | None = None
+    embedding_dimensions: int | None = None
     try:
         llm_config_module = importlib.import_module("cognee.infrastructure.llm.config")
         llm_model = llm_config_module.get_llm_config().llm_model
@@ -161,10 +167,14 @@ def configured_models() -> tuple[str | None, str | None]:
         embedding_config_module = importlib.import_module(
             "cognee.infrastructure.databases.vector.embeddings.config"
         )
-        embedding_model = embedding_config_module.get_embedding_config().embedding_model
+        embedding_config = embedding_config_module.get_embedding_config()
+        embedding_model = embedding_config.embedding_model
+        raw_dimensions = getattr(embedding_config, "embedding_dimensions", None)
+        embedding_dimensions = int(raw_dimensions) if raw_dimensions is not None else None
     except Exception:
         embedding_model = None
-    return llm_model, embedding_model
+        embedding_dimensions = None
+    return llm_model, embedding_model, embedding_dimensions
 
 
 async def ensure_databases_ready() -> None:
@@ -244,8 +254,17 @@ def _dataset_missing_errors() -> tuple[type[BaseException], ...]:
 
 
 def _signature_default_type(fn: Any, param: str) -> type[Any] | None:
+    default = _signature_default(fn, param)
+    return default if isinstance(default, type) else None
+
+
+def _signature_default_int(fn: Any, param: str) -> int | None:
+    default = _signature_default(fn, param)
+    return default if isinstance(default, int) and not isinstance(default, bool) else None
+
+
+def _signature_default(fn: Any, param: str) -> Any:
     try:
-        default = inspect.signature(fn).parameters[param].default
+        return inspect.signature(fn).parameters[param].default
     except (KeyError, TypeError, ValueError):
         return None
-    return default if isinstance(default, type) else None

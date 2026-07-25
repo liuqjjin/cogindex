@@ -126,5 +126,8 @@ None of these affect runtime behavior; they matter when reading upstream docs.
   fundamentally from v0 (decorator/`export()` model) to v1. Mitigation:
   `UPSTREAM_LOCK.json` pin, compat checks, nightly upstream CI job.
 - Reconcile runs under an engine lock: any accidental I/O in cogindex's
-  reconcile would stall the engine. Enforced by code review + a unit test that
-  runs reconcile with all I/O seams stubbed to raise.
+  reconcile would stall the engine. Structurally prevented rather than tested
+  for: `reconcile()` is synchronous and the only object it can reach is its own
+  `DatasetHandle`, since the runtime is bound at sink time. Every I/O-capable
+  call lives behind `await` in a sink, so accidental blocking I/O in reconcile
+  would have to be newly introduced code, not a misuse of an existing seam.

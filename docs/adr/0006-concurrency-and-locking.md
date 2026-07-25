@@ -60,5 +60,11 @@ harmless outer guard and can be retired by configuration.
   convergent (ADR-0003). The lock removes wasted duplicate cognify work and
   shrinks the replace-sequence inconsistency window; it is an efficiency and
   operational-hygiene mechanism layered on a design that is already safe.
-  The two-worker fault-injection test demonstrates convergence both with and
-  without the cross-process lock.
+
+  Two independent observations back that claim, and it is worth being precise
+  about which does what. The Hypothesis convergence machine still passes with
+  the dataset lock replaced by a no-op, which is the evidence that
+  convergence does not need it. What the lock *does* buy is measured by
+  `tests/unit/test_fault_matrix.py::test_concurrent_batches_serialize_under_dataset_lock`,
+  which asserts two concurrent workers produce two non-overlapping
+  lock-delimited batches and fails when the lock is removed.

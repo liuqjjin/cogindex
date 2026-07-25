@@ -6,7 +6,7 @@ readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "cogindex contributors" }]
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.11,<3.14"
 keywords = ["cocoindex", "cognee", "knowledge-graph", "incremental", "rag", "etl"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -14,7 +14,6 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",

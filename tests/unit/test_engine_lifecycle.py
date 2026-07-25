@@ -239,6 +239,40 @@ def test_processing_config_change_purges_and_recognifies_all() -> None:
     assert sorted(ds.documents, key=str) == sorted([id_a, id_b], key=str)
 
 
+def test_unrelated_config_change_reprocesses_nothing() -> None:
+    # The other half of ADR-0005: a knob that cannot change derivatives must
+    # not be able to trigger a rebuild. Between the two runs the runtime object
+    # and its lock provider are replaced, which is what a deployment change
+    # touches, while the ProcessingConfig stays byte-identical.
+    env, fake = _setup("unrelated_config")
+    dataset = "docs_unrelated"
+    docs = {"a.md": "alpha", "b.md": "beta"}
+    _run_app(env, "engine_lc_unrelated", dataset=dataset, docs=docs)
+    mutating_before = _mutating(fake)
+
+    swapped = FakeCogneeRuntime(lock_provider=cogindex.InProcessLockProvider(timeout=30))
+    swapped.datasets = fake.datasets
+    # resolve_dataset is not part of the recorded call log, so count it here:
+    # without this the assertions below would also pass if the engine had
+    # quietly kept using the old runtime.
+    resolves = 0
+    original_resolve = swapped.resolve_dataset
+
+    async def counting_resolve(name: str, tenant: str) -> cogindex.DatasetHandle:
+        nonlocal resolves
+        resolves += 1
+        return await original_resolve(name, tenant)
+
+    swapped.resolve_dataset = counting_resolve  # type: ignore[method-assign]
+    env.context_provider.provide(_RUNTIME_KEY, swapped)
+    _run_app(env, "engine_lc_unrelated", dataset=dataset, docs=docs)
+
+    assert resolves > 0, "the second run never reached the replacement runtime"
+    assert _mutating(swapped) == []
+    assert _mutating(fake) == mutating_before
+    assert swapped.unconverged_documents("default", dataset) == []
+
+
 def test_unmount_system_managed_removes_all_documents() -> None:
     env, fake = _setup("unmount_system")
     dataset = "docs_unmount_sys"

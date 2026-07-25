@@ -38,5 +38,7 @@ with a warning, not an error, to keep the call idempotent/retry-safe.
 ## What cogindex does today
 
 One `cognify(datasets=[dataset_id])` per changed batch, relying on the
-completion gate to skip unchanged items. Correct, but pays the O(dataset)
-enumeration cost per batch; benchmark M11 measures exactly this overhead.
+completion gate to skip unchanged items. Correct, but it pays the O(dataset)
+enumeration cost on every batch. The `freshness` category of `benchmarks/`
+measures exactly this: the latency of a single-document change against a
+corpus of a given size.

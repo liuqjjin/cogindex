@@ -14,12 +14,7 @@ from __future__ import annotations
 from cocoindex.connectorkits.target import ManagedBy
 
 from ._doctor import DoctorFinding, DoctorReport, doctor
-from ._errors import (
-    CogindexError,
-    CompatibilityError,
-    LockTimeoutError,
-    UnsupportedCapabilityError,
-)
+from ._errors import CogindexError, CompatibilityError, LockTimeoutError
 from ._identity import (
     COGINDEX_NAMESPACE,
     IDENTITY_SCHEMA_VERSION,
@@ -76,7 +71,6 @@ __all__ = [
     "PostgresAdvisoryLockProvider",
     "ProcessingConfig",
     "StoredDocument",
-    "UnsupportedCapabilityError",
     "VerificationIssue",
     "VerificationReport",
     "dataset_target",

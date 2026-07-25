@@ -39,9 +39,9 @@ __all__ = [
 class CognifyProfile:
     """The subset of ``cognee.cognify()`` parameters cogindex manages.
 
-    ``None`` means "use cognee's default"; the derived
-    :class:`ProcessingConfig` resolves and records the *effective* value so
-    that upgrading cognee's defaults still invalidates correctly.
+    ``None`` means "use cognee's default". The derived
+    :class:`ProcessingConfig` records the *effective* value instead, so that a
+    cognee upgrade that changes a default still invalidates correctly.
     """
 
     graph_model: type[Any] | None = None
@@ -69,6 +69,9 @@ class ProcessingConfig:
     temporal_cognify: bool = False
     llm_model: str | None = None
     embedding_model: str | None = None
+    # Configurable independently of the model (cognee reads EMBEDDING_DIMENSIONS
+    # from the environment), and changing it invalidates every stored vector.
+    embedding_dimensions: int | None = None
     extras: tuple[tuple[str, str], ...] = ()
 
     def fingerprint(self) -> str:
@@ -80,27 +83,33 @@ def processing_config_from_profile(
 ) -> ProcessingConfig:
     """Derive the declarative :class:`ProcessingConfig` from a profile.
 
-    Resolves cognee's effective defaults (graph model, chunker) so the
-    fingerprint reflects what cognify will actually run, and captures the
-    globally configured LLM/embedding models — they live in cognee's env
-    config, not in cognify() arguments, but shape every derivative.
+    Every ``None`` in the profile is resolved to the value cognify would
+    actually use, read out of the installed version's signature, so that
+    upgrading cognee's own defaults shows up as a fingerprint change instead
+    of passing unnoticed. The globally configured LLM and embedding settings
+    are folded in for the same reason: they live in cognee's env config rather
+    than in cognify() arguments, yet they shape every derivative.
 
-    Set ``include_runtime_models=False`` when the same flow must produce
-    identical fingerprints across machines with different model configs (and
-    you accept that model changes then no longer invalidate).
+    Set ``include_runtime_models=False`` when one flow must produce identical
+    fingerprints across machines with different model configuration, accepting
+    that model changes then no longer invalidate anything.
     """
     compat_info = _compat.load()
     graph_model = profile.graph_model or compat_info.default_graph_model
     chunker = profile.chunker or compat_info.default_chunker
+    chunk_size = (
+        profile.chunk_size if profile.chunk_size is not None else (compat_info.default_chunk_size)
+    )
     llm_model: str | None = None
     embedding_model: str | None = None
+    embedding_dimensions: int | None = None
     if include_runtime_models:
-        llm_model, embedding_model = _compat.configured_models()
+        llm_model, embedding_model, embedding_dimensions = _compat.configured_models()
     return ProcessingConfig(
         graph_model_id=_qualified_id(graph_model),
         graph_model_schema_fingerprint=_model_schema_fingerprint(graph_model),
         chunker_id=_qualified_id(chunker),
-        chunk_size=profile.chunk_size,
+        chunk_size=chunk_size,
         custom_prompt_fingerprint=(
             fingerprint_content(profile.custom_prompt)
             if profile.custom_prompt is not None
@@ -109,6 +118,7 @@ def processing_config_from_profile(
         temporal_cognify=profile.temporal_cognify,
         llm_model=llm_model,
         embedding_model=embedding_model,
+        embedding_dimensions=embedding_dimensions,
     )
 
 

@@ -4,7 +4,7 @@ Thanks for considering a contribution.
 
 ## Setup
 
-Requirements: Python 3.11–3.14, [uv](https://docs.astral.sh/uv/).
+Requirements: Python 3.11 to 3.13, [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone <your fork>
@@ -45,7 +45,10 @@ make test-llm               # opt-in, needs LLM_API_KEY
 Bumping the supported `cocoindex`/`cognee` range requires:
 1. updating `UPSTREAM_LOCK.json` via `make upstream-lock` (with refreshed
    `.upstream/` clones),
-2. re-running the compatibility tests (`tests/unit/test_compat.py`),
+2. re-running `tests/unit/test_compat.py`, which pins the exact upstream
+   surface `src/cogindex/_compat.py` depends on, and
+   `tests/integration -m integration`, which is where behavior changes that
+   type signatures cannot reveal actually show up,
 3. a CHANGELOG entry describing observed upstream behavior changes.
 
 ## Commit / PR conventions

@@ -136,6 +136,7 @@ def _base_processing_config() -> ProcessingConfig:
         temporal_cognify=False,
         llm_model="llm-1",
         embedding_model="emb-1",
+        embedding_dimensions=1536,
         extras=(("k", "v"),),
     )
 
@@ -162,6 +163,9 @@ _FIELD_CHANGES: list[tuple[str, Callable[[ProcessingConfig], ProcessingConfig]]]
     ("temporal_cognify", lambda c: dataclasses.replace(c, temporal_cognify=True)),
     ("llm_model", lambda c: dataclasses.replace(c, llm_model="llm-2")),
     ("embedding_model", lambda c: dataclasses.replace(c, embedding_model="emb-2")),
+    # Same model at a different width: every stored vector is invalidated, and
+    # cognee takes this from the environment independently of the model name.
+    ("embedding_dimensions", lambda c: dataclasses.replace(c, embedding_dimensions=3072)),
     ("extras", lambda c: dataclasses.replace(c, extras=(("k", "v2"),))),
 ]
 
@@ -170,6 +174,46 @@ def test_field_change_parametrization_covers_every_field() -> None:
     covered = {name for name, _ in _FIELD_CHANGES}
     all_fields = {f.name for f in dataclasses.fields(ProcessingConfig)}
     assert covered == all_fields
+
+
+def test_processing_config_holds_nothing_that_cannot_change_derivatives() -> None:
+    """ADR-0005's exclusion list, enforced structurally.
+
+    Every field here triggers a purge and re-cognify of an entire dataset when
+    it changes, so a connection string or a batch size landing in this struct
+    would mean rotating a credential rebuilds the whole graph. Deployment and
+    performance knobs belong on the runtime, which never reaches a fingerprint.
+    """
+    forbidden = (
+        "url",
+        "dsn",
+        "host",
+        "port",
+        "password",
+        "token",
+        "key",
+        "secret",
+        "credential",
+        "batch",
+        "concurrency",
+        "parallel",
+        "worker",
+        "timeout",
+        "retry",
+        "log",
+        "telemetry",
+        "lock",
+        "path",
+        "root",
+        "dir",
+    )
+    for field in dataclasses.fields(ProcessingConfig):
+        # api_key-ish names are the dangerous ones; embedding_model is fine.
+        hits = [word for word in forbidden if word in field.name.lower()]
+        assert not hits, (
+            f"ProcessingConfig.{field.name} looks like a deployment knob ({hits}); "
+            "fields here force a full dataset rebuild when they change"
+        )
 
 
 @pytest.mark.parametrize(
