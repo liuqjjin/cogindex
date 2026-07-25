@@ -17,6 +17,7 @@ with named, reviewable scenarios:
  9. stale-identity cleanup crashing mid-delete
 10. torn hard delete (derivatives gone, row and COMPLETED status kept),
     then the same content is declared again
+11. a metadata-only update crashes, and the retry stays metadata-only
 
 Plus: concurrent batches on one dataset are serialized by the dataset lock.
 """
@@ -339,6 +340,53 @@ async def test_torn_delete_then_redeclare_rebuilds_derivatives() -> None:
     # The purge is what makes this converge: without it cognify would skip
     # the still-COMPLETED item and the derivatives would stay empty.
     assert len(ops(fake, "purge_document_memory")) == 1
+
+
+# =============================================================================
+# 11. A metadata-only update crashes; the retry must stay metadata-only
+# =============================================================================
+
+
+def labelled(content: str, label: str) -> CogneeDocumentSpec:
+    return CogneeDocumentSpec(content=content, label=label)
+
+
+async def test_metadata_only_update_retry_preserves_derivatives() -> None:
+    """Retrying a failed label change must not rebuild the graph.
+
+    A failed update leaves the committed record and the attempted one as
+    possible states with prev_may_be_missing=False (upstream:
+    test_prev_may_be_missing_after_failed_update). Both agree on every
+    derivative-affecting field, so the retry stays update_metadata: no purge,
+    no second cognify, derivatives untouched. Escalating to replace here
+    would pay a full re-extraction for a label — the most expensive kind of
+    needless work this connector exists to avoid.
+    """
+    fake, engine = make_stack()
+    await engine.sync({"a.md": labelled("alpha", "first")})
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.derived_fragments == {fingerprint_content("alpha")}
+    cognifies_before = len(ops(fake, "cognify_dataset"))
+
+    # The metadata upsert crashes; the external state is untouched.
+    relabelled = {"a.md": labelled("alpha", "second")}
+    fake.inject_fault("add_documents", after_items=0)
+    assert await engine.sync_expect_crash(relabelled, InjectedFault)
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.label == "first"
+    assert document.cognify_complete is True
+
+    await engine.sync(relabelled)
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.label == "second"
+    # The whole point: derivatives survived and cognify never re-ran.
+    assert document.derived_fragments == {fingerprint_content("alpha")}
+    assert ops(fake, "purge_document_memory") == []
+    assert len(ops(fake, "cognify_dataset")) == cognifies_before
+    engine.assert_fixed_point(relabelled)
 
 
 # =============================================================================

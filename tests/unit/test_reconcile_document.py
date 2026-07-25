@@ -148,6 +148,22 @@ def test_metadata_only_change_updates_metadata() -> None:
     assert output.action.payload == payload_for(spec)
 
 
+def test_metadata_only_retry_after_failed_update_still_updates_metadata() -> None:
+    # The engine transition upstream pins in
+    # test_prev_may_be_missing_after_failed_update: a failed metadata update
+    # leaves both the committed and the attempted record as possible states,
+    # with prev_may_be_missing=False. Both agree on every
+    # derivative-affecting field, so the retry must stay metadata-only —
+    # escalating to replace here would rebuild the whole graph for a label.
+    old = record_for(make_spec(label="old label"))
+    spec = make_spec(label="new label")
+    attempted = record_for(spec)
+    assert old.content_fingerprint == attempted.content_fingerprint
+    output = reconcile(make_handler(), spec, [old, attempted], False)
+    assert output is not None
+    assert output.action.op == "update_metadata"
+
+
 def test_metadata_only_change_with_missing_prev_escalates_to_replace() -> None:
     # Conservative escalation: a missing record may mean cognify never completed.
     spec = make_spec(label="new label")
