@@ -25,7 +25,7 @@ make test-property     # Hypothesis state machine
 make test-integration  # real local Cognee, deterministic LLM (about 2 minutes)
 make test-postgres     # needs Docker or POSTGRES_DSN
 make test-llm          # opt-in, real provider, costs money
-make coverage          # unit + property + integration; currently 89%
+make coverage          # unit + property + integration; currently 91% overall
 make smoke             # build a wheel and import it in a clean venv
 ```
 
@@ -52,8 +52,9 @@ engine a child handler. That sink resolves the `CogneeRuntime` from the
 `ContextProvider` and constructs a `DocumentHandler` with the runtime already
 bound. `DocumentHandler.reconcile` derives `data_id`, collects stale ids, and
 classifies the write. `DocumentHandler._apply` executes one batch per dataset,
-under the dataset lock, in a fixed order: hard deletes, derivative purges, one
-batched add, one cognify.
+under the dataset lock, in a fixed order: hard deletes and recreations,
+derivative purges, one batched add, one cognify. A system-managed dataset
+teardown takes that same lock before removing the whole dataset.
 
 ## Invariants
 
@@ -70,21 +71,27 @@ batched add, one cognify.
 4. Sink actions are idempotent and safe under `prev_may_be_missing` and
    multiple `prev_possible_records`. Deleting or purging something absent is
    success.
-5. `prev_may_be_missing=True` with a non-empty `prev_possible_records` is a
-   `replace`, never an `upsert`. A torn hard delete drops derivatives before
-   the row that carries the COMPLETED status, so the create path would commit a
-   tracking record over a document with no derivatives and never look at it
-   again (ADR-0004, second amendment). Empty `prev_records` keeps the create
-   path deliberately: nothing recorded could have torn.
-6. Content, annotations and processing fingerprints are derivative-affecting
-   and force a replace. The metadata fingerprint (label, external metadata) is
-   benign and takes the cheap re-add path. Collapsing these makes every label
-   edit pay for a re-extraction.
+5. `prev_may_be_missing=True` with a non-empty `prev_possible_records` is at
+   least a `replace`, never an `upsert`; a weight mismatch escalates it to
+   `recreate`. A torn hard delete drops derivatives before the row that carries
+   the COMPLETED status, so the create path would commit a tracking record over
+   a document with no derivatives and never look at it again (ADR-0004, second
+   amendment). Empty `prev_records` keeps the create path deliberately:
+   nothing recorded could have torn.
+6. Content, external metadata, node-set annotations and processing
+   fingerprints are derivative-affecting and force a memory-only replace.
+   Importance-weight changes force hard recreation because Cognee does not
+   update that field on an existing raw row. The metadata fingerprint contains
+   only the label and takes the cheap re-add path.
 7. Version-sensitive cognee imports go through `src/cogindex/_compat.py` and
    nowhere else. No monkey-patching.
 8. Never commit a tracking record for a write that was not attempted, and never
    treat a cognee result containing `PipelineRunErrored` as success.
 9. Logs carry phase, counts and timing. Never content, never secrets.
+10. Every cogindex mutation of one dataset, including system-managed teardown,
+    is serialized through the runtime's dataset lock. Do not move that locking
+    into individual runtime implementations or one implementation will
+    eventually omit it.
 
 ## Testing rules
 
@@ -114,6 +121,9 @@ becomes an ADR.
 
 - Re-adding changed content under the same `data_id` does not remove the old
   derivatives. Call `forget(memory_only=True)` first.
+- Re-adding an existing `data_id` does not update `importance_weight`, even
+  after a memory-only purge. Hard-delete the raw row before adding the desired
+  weight.
 - `add()` defaults `incremental_loading` and `data_cache` to True, and either
   one makes it skip a `data_id` whose add-pipeline status is COMPLETED. The
   replacement content then never lands, because a memory-only purge resets only

@@ -11,9 +11,9 @@ only via the per-item completion gate
 checked in `cognee/modules/pipelines/operations/pipeline.py`): every call
 still enumerates the dataset's data items and evaluates the gate per item.
 
-A connector that knows *exactly which* `data_id`s changed (cogindex always
-does. It drives cognify right after targeted adds/purges) cannot express
-that. Costs:
+A connector that knows *exactly which* `data_id`s changed cannot express
+that. cogindex has this information because it drives cognify immediately
+after targeted adds and purges. Costs:
 
 - O(dataset) per-item status reads for an O(changed) update, on every batch.
 - The connector must trust the status gate rather than being able to state

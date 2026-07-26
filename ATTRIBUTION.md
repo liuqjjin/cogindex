@@ -19,12 +19,15 @@ published PyPI packages.
 - Repository: https://github.com/topoteretes/cognee
 - License: Apache License 2.0
 - Relationship: cogindex drives Cognee through its public Python API
-  (`cognee.add`, `cognee.cognify`, `cognee.forget`, `cognee.search`) plus the
-  `DataItem` dataclass (`cognee.tasks.ingestion.data_item`), which is not yet
-  re-exported at the package top level (see `docs/upstream-proposals/`).
+  (`cognee.add`, `cognee.cognify`, `cognee.forget` and dataset inspection)
+  plus the `DataItem` dataclass (`cognee.tasks.ingestion.data_item`), which is
+  not yet re-exported at the package top level (see
+  `docs/upstream-proposals/`). The examples use `cognee.search` only to show
+  their resulting graph.
 
 ## Audited versions
 
 The exact upstream commits this project was audited and developed against are
-pinned in [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json). The full-repository
-source audit ledger lives in [`docs/upstream-audit/`](docs/upstream-audit/).
+pinned in [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json). The repository-wide
+inventory and targeted source-review ledger live in
+[`docs/upstream-audit/`](docs/upstream-audit/).

@@ -1,9 +1,8 @@
 # Upstream proposals
 
-Four gaps that a full-repository audit of cocoindex and cognee turned up, each
-one something cogindex currently works around and would delete code to get.
-They are written as proposals rather than complaints: every one names the file,
-says what it would take, and states what cogindex does in the meantime.
+Four gaps found from a repository-wide inventory and targeted review of the
+CocoIndex and Cognee paths used by cogindex. Each proposal identifies the
+relevant upstream code, the requested change, and the current workaround.
 
 | # | Target | Ask | What it would remove from cogindex |
 |---|---|---|---|

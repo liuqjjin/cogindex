@@ -18,8 +18,9 @@ per-item incremental status, and the asyncio dataset lock).
   becomes a *new* row. Stable identity therefore requires supplying `data_id`.
 - **`DataItem` is not exported top-level**: absent from `cognee/__init__.py`
   and every `api` `__init__`. Only importable from
-  `cognee.tasks.ingestion.data_item`. (Upstream proposal filed; cogindex
-  isolates the import in `_compat.py`.)
+  `cognee.tasks.ingestion.data_item`. An upstream proposal is drafted in
+  `docs/upstream-proposals/0001-cognee-export-dataitem.md` but has not been
+  filed; cogindex isolates the import in `_compat.py`.
 - Re-`add` of an existing `data_id`: metadata upserted in place;
   `content_changed` → `pipeline_status = {}` (statuses reset). **Old
   graph/vector derivatives are NOT removed** (`ingest_data.py`); chunk/entity
@@ -98,10 +99,12 @@ per-item incremental status, and the asyncio dataset lock).
   `recovery.py` rolls back stale runs older than
   `COGNEE_STALE_RUN_RECOVERY_MIN_AGE_SECONDS` (default 3600 s), an explicit
   acknowledgment that multi-process runs share a DB without a lease.
-- **Open question tracked**: top-level `forget(data_id=…)` behavior when the
-  row is already absent (planner level is idempotent; top level not fully
-  traced). cogindex's runtime wraps hard deletes to treat missing-data as
-  success and pins that with a contract test against the real SDK.
+- A missing data item in an existing dataset is a no-op through the pinned
+  top-level `forget(data_id=…)` path. Dataset resolution is less precise:
+  `_resolve_dataset_id` raises a bare `ValueError` saying "not found or not
+  accessible". cogindex cannot safely classify that as absence, so it only
+  suppresses an explicit `DatasetNotFoundError`; `ValueError` and
+  `UnauthorizedDataAccessError` propagate.
 
 ## Locking (the gap cogindex fills)
 

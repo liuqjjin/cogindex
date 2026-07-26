@@ -7,9 +7,9 @@ gitignored `.upstream/` directory.
 
 Combined scale at the audited commits: **~3,900 tracked files, ~298k lines of
 first-party source and ~178k lines of tests**. Nobody reads that end-to-end in
-one pass, and this ledger does not pretend to. Instead it records, for every
-tracked file, *what it is* and *how deeply it was reviewed*, so the claim
-"audited" is checkable.
+one pass, and this ledger does not pretend to. The generated inventory records
+what every tracked file is; the review-state files record review depth either
+for an individual file or for a module whose path prefix covers it.
 
 ## Layout
 
@@ -26,17 +26,19 @@ tracked file, *what it is* and *how deeply it was reviewed*, so the claim
   `audit_status ∈ {reviewed-deep, reviewed-skim, classified-only}`, relevance
   to this connector, and risk notes.
 - `cocoindex/findings.md`, `cognee/findings.md`, the semantic audit: what the
-  state machinery actually does, with file/line references, and every place
-  upstream documentation disagreed with upstream code.
+  state machinery does along the paths cogindex depends on, with file/line
+  references and the documentation discrepancies found during the review.
 
 ## Method
 
 1. The inventory is generated mechanically; classification is rule-based and
    the rules are in the generator.
-2. Files on the connector's critical path (target-state engine, ingestion,
-   deletion/provenance, pipeline status, locking, config) were read in full
-   ("reviewed-deep"), including their tests: test assertions are treated as
-   the authoritative statement of upstream semantics.
+2. The connector's critical paths (target-state engine, ingestion,
+   deletion/provenance, pipeline status, locking, config) received targeted
+   review. Files marked `reviewed-deep` were read in full; files marked
+   `reviewed-skim` were checked for the interfaces and behavior relevant to
+   cogindex. Relevant upstream test assertions are treated as the authoritative
+   statement of upstream semantics.
 3. Adjacent modules were skimmed for interface shape ("reviewed-skim").
 4. Everything else is "classified-only": identified, categorized, and judged
    not to affect the integration, with the judgment recorded per module.
