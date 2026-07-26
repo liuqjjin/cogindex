@@ -155,6 +155,18 @@ async def stored_importance_weight(data_id: uuid.UUID) -> float | None:
     return float(value)
 
 
+async def existing_data_ids(data_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """Return the requested raw Cognee Data rows that still exist."""
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from sqlalchemy import select
+
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        rows = await session.scalars(select(Data.id).where(Data.id.in_(data_ids)))
+        return set(rows.all())
+
+
 # ---------------------------------------------------------------------------
 # runtime-level contract: lifecycle, replace protocol, shared entities
 # ---------------------------------------------------------------------------
@@ -207,6 +219,42 @@ async def test_lifecycle_replace_and_shared_entity_provenance(
     # -- idempotent deletes: repeating and deleting missing ids succeed -------
     await runtime.delete_documents(handle, [id_carol])
     await runtime.purge_document_memory(handle, [id_carol])
+
+
+async def test_tracking_loss_recovery_requires_hard_dataset_teardown(
+    runtime: LocalCogneeRuntime, llm_mock: AsyncMock
+) -> None:
+    """A memory-only dataset purge cannot remove undeclared stale raw rows."""
+    import cogindex._compat as compat_module
+
+    dataset = "int_tracking_loss"
+    ids = [did(dataset, "kept.md"), did(dataset, "deleted-at-source.md")]
+    handle = await runtime.add_documents(
+        DatasetHandle(name=dataset, tenant=TENANT),
+        [
+            DocumentPayload(data_id=ids[0], content="Bob works for AlphaCorp."),
+            DocumentPayload(data_id=ids[1], content="Carol works for SharedOrg."),
+        ],
+    )
+    assert handle.dataset_id is not None
+    await runtime.cognify_dataset(handle, CognifyProfile())
+
+    # This was the old recovery advice. It removes derivatives but preserves
+    # both raw rows, including the row whose source has disappeared.
+    await compat_module.load().cognee.forget(
+        dataset_id=handle.dataset_id,
+        memory_only=True,
+    )
+    stored_after_purge = await runtime.list_documents(handle)
+    assert {document.data_id for document in stored_after_purge} == set(ids)
+    assert all(not document.cognify_complete for document in stored_after_purge)
+
+    # Hard teardown is safe only for a dataset exclusively owned by the
+    # connector. It removes every raw row, graph/vector data, and the dataset
+    # record. The old handle is invalid afterwards, so resolve by name.
+    await runtime.teardown_dataset(handle)
+    assert (await runtime.resolve_dataset(dataset, TENANT)).dataset_id is None
+    assert await existing_data_ids(ids) == set()
 
 
 async def test_batch_purge_opens_one_database_context_for_the_whole_batch(

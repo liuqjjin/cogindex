@@ -97,13 +97,11 @@ the engine reconciles the container to non-existence and runs its sink once
 more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
 
 - **System-managed** (`managed_by="system"`): the container sink calls
-  `teardown_dataset`, which empties the dataset via `forget(dataset_id=...)`
-  of raw data, graph, and vector derivatives. The sink holds the same
+  `teardown_dataset`, which deletes the dataset via `forget(dataset_id=...)`,
+  including raw data, graph, vector derivatives and the dataset record. The
+  sink holds the same
   runtime-provided dataset lock used by document add/replace batches, so a
   whole-dataset teardown cannot interleave with a connector document write.
-  The dataset *row* survives: upstream's `empty_dataset` keeps it, and there
-  is no public dataset-row delete API. Documented as an upstream limitation,
-  rather than treated as successful row deletion.
 - **User-managed** (`managed_by="user"`): on target unmount,
   `resolve_system_transition` yields no action and the runtime observes
   **zero mutating calls**. The engine drops child tracking without issuing
@@ -199,13 +197,43 @@ and re-resolves and re-authorizes the dataset each call.
 
 The residual gap that leaves: a document whose tracking was **lost** rather
 than made uncertain (CocoIndex's store deleted or reset, or a destructive
-provider-generation bump) reaches reconcile as `prev=[]` while Cognee still
-holds its old derivatives; a subsequent content change would then orphan
-them. This is a one-off operational event, not a steady-state hazard, and it
-has an O(1) recovery that costs nothing in the normal path:
+provider-generation bump) reaches reconcile as `prev=[]` while Cognee may
+still hold an older version. A fresh create overwrites known source keys, but
+it cannot identify a Cognee row whose source document has disappeared.
 
-```python
-# After losing or resetting the CocoIndex tracking store, purge the dataset's
-# derivatives once, then re-run the flow to rebuild them.
-await cognee.forget(dataset_id=..., memory_only=True)
-```
+## Amendment: tracking-store loss requires a hard reset of owned data
+
+An earlier version of this ADR advised a dataset-level
+`forget(memory_only=True)` followed by a full run. That is incorrect.
+Memory-only forget removes graph and vector derivatives but deliberately keeps
+every raw row. A source document deleted before tracking loss therefore
+survives as an undeclared row; the fresh run schedules no delete for it and
+may cognify it again.
+
+Recovery depends on ownership:
+
+- Stop all writers before any recovery operation.
+- If the dataset is exclusively system-managed by this target, hard-empty it
+  through the runtime and then run a full sync:
+
+  ```python
+  handle = await runtime.resolve_dataset("docs", "default")
+  await runtime.teardown_dataset(handle)
+  ```
+
+  `teardown_dataset` calls hard dataset-level `forget`, removing raw rows,
+  graph data, vectors and the dataset record.
+- A shared or user-managed dataset cannot be cleared safely because tracking
+  loss also erased per-document ownership. Automatic recovery is not
+  available; reconcile it manually or sync into a fresh dataset name.
+
+Cognee's hard dataset path gathers per-row raw-data deletions with
+`return_exceptions=True` and logs individual failures without propagating
+them. The normal path removes every row, as the integration test verifies, but
+an upstream deletion error can still leave an inaccessible orphan row after
+the dataset, graph and vectors are gone. The current SDK result gives the
+runtime no reliable way to detect that partial cleanup.
+
+`tests/integration/test_local_cognee.py::
+test_tracking_loss_recovery_requires_hard_dataset_teardown` pins the
+difference between a memory-only purge and hard teardown.

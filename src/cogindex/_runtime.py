@@ -98,13 +98,18 @@ class CogneeRuntime(Protocol):
         ...
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
-        """Remove all managed content of the dataset. An unambiguously missing
-        dataset is a no-op; authorization and validation failures propagate."""
+        """Remove the dataset and all managed content.
+
+        A successful teardown invalidates ``handle``; resolve the dataset by
+        name before any later operation. An unambiguously missing dataset is a
+        no-op; authorization and validation failures propagate.
+        """
         ...
 
     async def list_documents(self, handle: DatasetHandle) -> Sequence[StoredDocument]:
         """Read-only view of the dataset's documents for drift verification.
-        A missing dataset yields an empty sequence."""
+        A freshly resolved missing dataset yields an empty sequence; a stale
+        non-empty handle may fail authorization after teardown."""
         ...
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:

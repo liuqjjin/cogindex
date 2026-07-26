@@ -155,12 +155,19 @@ These are upstream-constrained and documented rather than hidden. Do not open
 work to "fix" them without an upstream change first.
 
 - No REST-backed runtime: Cognee's REST add takes no `data_id`.
-- Unmounting empties a dataset but leaves the empty dataset row.
+- Unmounting a system-managed target hard-deletes the Cognee dataset, including
+  its raw rows, graph, vectors and dataset record.
+- Cognee logs but does not propagate individual raw-row deletion failures
+  during whole-dataset teardown. A partial hard delete can therefore leave an
+  inaccessible orphan row that this runtime cannot detect from the SDK result.
 - `managed_by="user"` only suppresses whole-dataset teardown when the target
   is unmounted. While mounted, a document that stops being declared is still
   deleted; this is not per-document ownership.
 - `verify_dataset` compares presence, identity, completion and label. It cannot
   see whether derivatives match current content.
-- Losing the CocoIndex tracking store leaves documents looking new while Cognee
-  still holds their old derivatives. Recovery is one dataset-level
-  `forget(memory_only=True)` and a re-run (ADR-0004).
+- Losing the CocoIndex tracking store erases the only record of which Cognee
+  rows were previously managed. A memory-only purge is insufficient because
+  it keeps raw rows for source documents that may since have been deleted.
+  Stop all writers; hard-empty an exclusively system-managed dataset and run
+  a full sync. A shared or user-managed dataset needs manual reconciliation or
+  a fresh dataset name (ADR-0004).

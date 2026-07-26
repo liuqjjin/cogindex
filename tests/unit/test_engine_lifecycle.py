@@ -320,11 +320,8 @@ def test_unmount_system_managed_removes_all_documents() -> None:
     _run_empty_app(env, "engine_lc_unmount_sys")
 
     # End-state contract only: cleanup may arrive as per-document deletes,
-    # teardown_dataset, or both. The fake keeps the dataset row (mirroring
-    # upstream empty_dataset), but it must contain zero documents.
-    ds = fake.dataset("default", dataset)
-    assert ds is not None
-    assert len(ds.documents) == 0
+    # teardown_dataset, or both. Hard teardown removes the dataset itself.
+    assert fake.dataset("default", dataset) is None
 
 
 def test_unmount_lock_failure_leaves_intent_uncommitted_and_retries() -> None:

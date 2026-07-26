@@ -388,7 +388,7 @@ async def test_cognify_gate_ignores_profile_change() -> None:
     assert runtime.unconverged_documents(TENANT, DATASET, profile=old_profile) == []
 
 
-async def test_missing_targets_are_noops_and_teardown_keeps_dataset() -> None:
+async def test_missing_targets_are_noops_and_teardown_removes_dataset() -> None:
     runtime = FakeCogneeRuntime()
     missing_handle = DatasetHandle(name="never-created", tenant=TENANT)
     ghost_id = _data_id("ghost")
@@ -407,15 +407,11 @@ async def test_missing_targets_are_noops_and_teardown_keeps_dataset() -> None:
     await runtime.purge_document_memory(handle, [ghost_id])
     assert runtime.document(TENANT, DATASET, data_id) is not None
 
-    # Teardown empties documents but keeps the dataset entry.
-    dataset_id_before = (await runtime.resolve_dataset(DATASET, TENANT)).dataset_id
-    assert dataset_id_before is not None
+    # Teardown removes the dataset and all of its documents.
+    assert (await runtime.resolve_dataset(DATASET, TENANT)).dataset_id is not None
     await runtime.teardown_dataset(handle)
-    dataset = runtime.dataset(TENANT, DATASET)
-    assert dataset is not None
-    assert dataset.documents == {}
-    resolved = await runtime.resolve_dataset(DATASET, TENANT)
-    assert resolved.dataset_id == dataset_id_before
+    assert runtime.dataset(TENANT, DATASET) is None
+    assert (await runtime.resolve_dataset(DATASET, TENANT)).dataset_id is None
 
 
 async def test_inject_fault_times_after_items_custom_exc_and_unknown_op() -> None:

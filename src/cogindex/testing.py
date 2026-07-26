@@ -270,11 +270,10 @@ class FakeCogneeRuntime:
         await _yield_point()
         self.calls.append(("teardown_dataset", handle.name, ()))
         self._fire("teardown_dataset")
-        dataset = self.datasets.get((handle.tenant, handle.name))
-        if dataset is None:
-            return
-        # Mirrors upstream empty_dataset: contents removed, dataset row kept.
-        dataset.documents.clear()
+        # Upstream hard dataset forget removes the dataset row as well as its
+        # contents. Keep the fake faithful so lifecycle tests do not preserve
+        # a container that no longer exists in Cognee.
+        self.datasets.pop((handle.tenant, handle.name), None)
 
     async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
         await _yield_point()

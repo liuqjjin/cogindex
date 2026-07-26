@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make verification and doctor reports immutable, reject duplicate stored
   identities, and classify missing required model credentials as a failed
   health check.
+- Let deterministic examples skip provider-credential checks so the no-key
+  quickstart does not report false critical findings.
+- Correct the tracking-store-loss runbook: a memory-only purge leaves stale
+  raw rows, so an exclusively owned dataset must be hard-emptied before a full
+  sync; shared datasets require manual recovery.
+- Align teardown documentation and the fake runtime with Cognee's hard
+  dataset forget, which removes the dataset record as well as its contents.
 - Pin workflow actions to full commits, schedule updates for actions,
   `uv.lock` and pre-commit hooks, keep dependency auditing blocking except for
   the documented unpatched `diskcache` advisory, and strengthen the

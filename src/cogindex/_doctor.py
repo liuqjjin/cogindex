@@ -47,13 +47,18 @@ class DoctorReport:
         return "\n".join(lines)
 
 
-def doctor() -> DoctorReport:
-    """Run all environment checks and return the report."""
+def doctor(*, check_credentials: bool = True) -> DoctorReport:
+    """Run environment checks and return the report.
+
+    ``check_credentials=False`` is intended for deterministic examples that
+    replace both model adapters and therefore do not need provider credentials.
+    """
     findings: list[DoctorFinding] = []
     findings.append(_check_cocoindex())
     findings.append(_check_cognee_compat())
     findings.extend(_check_storage_roots())
-    findings.extend(_check_credentials())
+    if check_credentials:
+        findings.extend(_check_credentials())
     return DoctorReport(findings=tuple(findings))
 
 

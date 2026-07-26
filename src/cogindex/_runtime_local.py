@@ -227,8 +227,9 @@ class LocalCogneeRuntime:
             return
         compat_info = _compat.load()
         try:
-            # Empties the dataset: raw data + graph + vector. The dataset row
-            # itself survives, an upstream limitation documented in ADR-0004.
+            # Hard dataset forget removes raw data, graph, vectors and the
+            # dataset row itself. A stale handle is therefore invalid after
+            # this call; callers must resolve by name again if they need it.
             await compat_info.cognee.forget(dataset_id=handle.dataset_id, user=self._user)
         except compat_info.dataset_missing_errors as exc:
             logger.info(

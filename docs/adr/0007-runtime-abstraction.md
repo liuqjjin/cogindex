@@ -56,6 +56,11 @@ selected implicitly, and duplicate owned matches fail instead of using list
 order. This keeps a name-only declaration from writing into a dataset merely
 shared with the acting user.
 
+Hard dataset teardown deletes the dataset record. A handle containing its old
+UUID is invalid afterwards; callers that continue must resolve the dataset by
+name and use the fresh handle. The runtime does not treat an authorization
+error from a stale UUID as proof that the dataset is absent.
+
 ### No remote runtime in 0.1
 
 There is deliberately no REST-backed runtime. A read-only one would be easy

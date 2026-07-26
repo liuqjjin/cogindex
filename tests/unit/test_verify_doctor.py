@@ -303,6 +303,19 @@ def test_doctor_runs_and_reports_installed_versions() -> None:
     assert "cognee-compat" in rendered
 
 
+def test_doctor_can_skip_credentials_for_deterministic_examples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_credentials_check() -> list[cogindex.DoctorFinding]:
+        raise AssertionError("credential check should be skipped")
+
+    monkeypatch.setattr(_doctor, "_check_credentials", unexpected_credentials_check)
+
+    report = doctor(check_credentials=False)
+
+    assert all(not finding.check.endswith("-credentials") for finding in report.findings)
+
+
 def test_missing_required_credentials_make_doctor_not_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

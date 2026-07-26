@@ -89,6 +89,8 @@ of every possible upstream or deployment failure.
 - Losing the tracking store is outside the convergence argument: uncertainty
   the engine *records* is replayed conservatively, but uncertainty that is
   *erased* leaves documents looking brand new while Cognee still holds their
-  old derivatives. Recovery is one dataset-level
-  `forget(dataset_id=…, memory_only=True)` followed by a re-run (ADR-0004's
-  second amendment).
+  old rows and derivatives. A memory-only purge is not recovery: it preserves
+  raw rows for source documents that may since have been deleted. After
+  stopping all writers, an exclusively system-managed dataset must be
+  hard-emptied and fully synchronized. A shared or user-managed dataset needs
+  manual reconciliation or a fresh dataset name (ADR-0004).

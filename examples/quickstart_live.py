@@ -121,7 +121,7 @@ async def main() -> None:
         data_root=args.storage / "data", system_root=args.storage / "system"
     )
 
-    health = cogindex.doctor()
+    health = cogindex.doctor(check_credentials=not args.deterministic)
     print(health.render())
     if not health.ok and not args.deterministic:
         print("\nenvironment is not ready; fix the findings above or use --deterministic")

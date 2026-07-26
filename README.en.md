@@ -51,6 +51,10 @@ identity format.
 git clone https://github.com/liuqjjin/cogindex.git
 cd cogindex
 uv sync --all-extras
+
+mkdir -p my-docs
+printf '# CocoIndex\nCocoIndex tracks source changes.\n' > my-docs/cocoindex.md
+printf '# Cognee\nCognee builds a knowledge graph.\n' > my-docs/cognee.md
 uv run python examples/quickstart_live.py ./my-docs --deterministic
 ```
 
@@ -121,7 +125,7 @@ purge derivatives for replacements
     ↓
 batched add
     ↓
-one cognify call
+at most one cognify call, when reprocessing is needed
     ↓
 commit CocoIndex tracking records
 ```
@@ -152,6 +156,12 @@ The automatic recovery model covers uncertainty created by the synchronization
 flow itself. Direct external changes to Cognee are different: `verify_dataset`
 can detect part of that drift, but an ordinary rerun may not repair it.
 
+Losing the CocoIndex tracking store also removes the record of which Cognee
+rows were managed. A memory-only purge is insufficient because it preserves
+raw rows for source documents that may have been deleted. Stop all writers and
+hard-empty an exclusively owned dataset before a full sync. A shared or
+user-managed dataset requires manual reconciliation or a fresh dataset name.
+
 ## Verification
 
 ```python
@@ -181,7 +191,7 @@ make ci
 ```
 
 CI covers Linux and macOS on Python 3.11, 3.12, and 3.13, strict mypy, Ruff,
-287 unit tests, a 60-example × 40-step Hypothesis state machine, a local
+288 unit tests, a 60-example × 40-step Hypothesis state machine, a local
 Cognee instance with deterministic model substitutes, PostgreSQL advisory
 locks, and clean wheel installation.
 
