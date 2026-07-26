@@ -1,14 +1,11 @@
 """Test doubles: an in-memory Cognee emulator with fault injection.
 
-:class:`FakeCogneeRuntime` emulates exactly the Cognee semantics cogindex
-depends on: implicit dataset creation, data_id-keyed rows, the derivative
-lifecycle (including the upstream behavior that re-adding changed content
-resets pipeline status but KEEPS stale derivatives, and that the incremental
-cognify gate checks completion only, never configuration), so unit and
-property tests can assert convergence without a real Cognee stack.
+:class:`FakeCogneeRuntime` models the audited subset of Cognee behavior used by
+cogindex: implicit dataset creation, data_id-keyed rows, stale derivatives
+after re-adding changed content, unchanged importance weight on an existing
+row, and completion-based incremental cognify.
 
-It is not a Cognee replacement, and tests built on it are never presented as
-integration tests (AGENTS.md hard rule #7).
+It is not a Cognee replacement. Tests using it are not integration tests.
 """
 
 from __future__ import annotations
@@ -354,7 +351,13 @@ class FakeCogneeRuntime:
         content_changed = fingerprint_content(existing.payload.content) != fingerprint_content(
             payload.content
         )
-        existing.payload = payload
+        # Cognee 1.4's existing-row ingestion branch updates content and
+        # metadata but omits importance_weight. Keep that omission visible so
+        # tests cannot make a memory-only replace look sufficient.
+        existing.payload = dataclasses.replace(
+            payload,
+            importance_weight=existing.payload.importance_weight,
+        )
         if content_changed:
             # Upstream-faithful: status resets so cognify reprocesses, but
             # old derivatives are NOT removed (they go stale/orphaned).

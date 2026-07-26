@@ -1,12 +1,8 @@
-"""Declarative, incremental materialization of CocoIndex-managed documents
-into Cognee knowledge graphs.
+"""CocoIndex target for synchronizing documents into Cognee knowledge graphs.
 
-cogindex is a CocoIndex custom target connector: CocoIndex owns target-state
-declaration, change detection, ownership and deletion; Cognee owns ingestion,
-cognify, the knowledge graph and retrieval. cogindex provides what neither
-does alone: stable document identity, idempotent writes, in-place content
-replacement, configuration invalidation, deletion, and convergence after
-failure (see docs/adr/).
+The package provides stable document ids, incremental replacement, deletion,
+configuration invalidation, and retry-safe target handlers. Design decisions
+are recorded in ``docs/adr/``.
 """
 
 from __future__ import annotations

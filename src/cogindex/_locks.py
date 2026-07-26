@@ -1,14 +1,14 @@
 """Dataset lock providers (ADR-0006).
 
-Locks serialize expensive per-dataset batch application (one cognify at a
-time per dataset) and reduce wasted duplicate work across concurrent
-updaters. Correctness never depends on them: the write protocol stays
-convergent without any lock (ADR-0003).
+Locks serialize per-dataset document batches and whole-dataset teardown.
+Document actions remain safe to replay, but teardown must share this lock so
+it cannot overlap a connector batch (ADR-0003/0006).
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Protocol, runtime_checkable
@@ -25,6 +25,15 @@ class LockProvider(Protocol):
     def lock(self, scope: str) -> AbstractAsyncContextManager[None]: ...
 
 
+def _validate_scope(scope: str) -> None:
+    if not isinstance(scope, str):
+        raise TypeError(f"lock scope must be str, got {type(scope).__name__}")
+    if not scope:
+        raise ValueError("lock scope must be non-empty")
+    if "\x00" in scope:
+        raise ValueError("lock scope must not contain NUL characters")
+
+
 class InProcessLockProvider:
     """The default provider: one ``asyncio.Lock`` per scope.
 
@@ -37,10 +46,15 @@ class InProcessLockProvider:
     __slots__ = ("_locks", "_timeout")
 
     def __init__(self, *, timeout: float | None = None) -> None:
+        if timeout is not None and (
+            isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0
+        ):
+            raise ValueError("timeout must be a finite positive number or None")
         self._locks: dict[str, asyncio.Lock] = {}
         self._timeout = timeout
 
     def lock(self, scope: str) -> AbstractAsyncContextManager[None]:
+        _validate_scope(scope)
         return self._lock(scope)
 
     @asynccontextmanager

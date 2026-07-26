@@ -11,12 +11,14 @@ from __future__ import annotations
 import dataclasses
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 import msgspec
 import pytest
 from cocoindex.connectorkits.statediff import MutualTrackingRecord
 from cocoindex.connectorkits.target import ManagedBy
 
+from cogindex import CompatibilityError, _compat
 from cogindex._records import RECORD_SCHEMA_VERSION, DatasetConfigRecord, DocumentRecord
 from cogindex._spec import (
     CogneeDocumentSpec,
@@ -38,12 +40,35 @@ def test_document_record_json_roundtrip() -> None:
         annotations_fingerprint="af",
         metadata_fingerprint="mf",
         processing_fingerprint="pf",
+        importance_weight_fingerprint="wf",
         schema_version=RECORD_SCHEMA_VERSION,
     )
     decoded = msgspec.json.decode(msgspec.json.encode(record), type=DocumentRecord)
     assert decoded == record
     assert isinstance(decoded.data_id, uuid.UUID)
     assert decoded.data_id == record.data_id
+
+
+def test_document_record_without_weight_fingerprint_uses_unknown_default() -> None:
+    """Records written before the weight split remain decodable.
+
+    The empty sentinel cannot equal a real BLAKE2 fingerprint, so reconcile
+    will conservatively recreate the row once.
+    """
+    encoded = msgspec.json.encode(
+        {
+            "data_id": uuid.uuid5(uuid.NAMESPACE_DNS, "legacy-cogindex-record"),
+            "content_fingerprint": "cf",
+            "annotations_fingerprint": "af",
+            "metadata_fingerprint": "mf",
+            "processing_fingerprint": "pf",
+            "schema_version": RECORD_SCHEMA_VERSION,
+        }
+    )
+
+    decoded = msgspec.json.decode(encoded, type=DocumentRecord)
+
+    assert decoded.importance_weight_fingerprint == ""
 
 
 def test_dataset_config_record_json_roundtrip() -> None:
@@ -80,7 +105,7 @@ def test_label_change_affects_only_metadata_fingerprint() -> None:
     assert spec_a.metadata_fingerprint != spec_b.metadata_fingerprint
 
 
-def test_external_metadata_change_affects_only_metadata_fingerprint() -> None:
+def test_external_metadata_change_affects_annotations_fingerprint() -> None:
     spec_a = CogneeDocumentSpec(
         content="body",
         label="lbl",
@@ -96,8 +121,29 @@ def test_external_metadata_change_affects_only_metadata_fingerprint() -> None:
         importance_weight=1.0,
     )
     assert spec_a.content_fingerprint == spec_b.content_fingerprint
-    assert spec_a.annotations_fingerprint == spec_b.annotations_fingerprint
-    assert spec_a.metadata_fingerprint != spec_b.metadata_fingerprint
+    assert spec_a.annotations_fingerprint != spec_b.annotations_fingerprint
+    assert spec_a.metadata_fingerprint == spec_b.metadata_fingerprint
+
+
+def test_external_metadata_is_copied_at_construction() -> None:
+    metadata: dict[str, Any] = {
+        "source": "s1",
+        "nested": {"revision": 1},
+        "tags": ["a"],
+    }
+    spec = CogneeDocumentSpec(content="body", external_metadata=metadata)
+    fingerprint = spec.annotations_fingerprint
+
+    metadata["source"] = "s2"
+    metadata["nested"]["revision"] = 2
+    metadata["tags"].append("b")
+
+    assert spec.external_metadata == {
+        "source": "s1",
+        "nested": {"revision": 1},
+        "tags": ["a"],
+    }
+    assert spec.annotations_fingerprint == fingerprint
 
 
 def test_node_set_fingerprint_is_order_insensitive_but_field_preserves_order() -> None:
@@ -108,10 +154,11 @@ def test_node_set_fingerprint_is_order_insensitive_but_field_preserves_order() -
     assert spec_ba.node_set == ("b", "a")
 
 
-def test_importance_weight_changes_annotations_not_metadata() -> None:
+def test_importance_weight_changes_only_weight_fingerprint() -> None:
     spec_a = CogneeDocumentSpec(content="body", label="lbl", importance_weight=0.5)
     spec_b = CogneeDocumentSpec(content="body", label="lbl", importance_weight=0.75)
-    assert spec_a.annotations_fingerprint != spec_b.annotations_fingerprint
+    assert spec_a.importance_weight_fingerprint != spec_b.importance_weight_fingerprint
+    assert spec_a.annotations_fingerprint == spec_b.annotations_fingerprint
     assert spec_a.metadata_fingerprint == spec_b.metadata_fingerprint
     assert spec_a.content_fingerprint == spec_b.content_fingerprint
 
@@ -125,6 +172,96 @@ def test_str_and_bytes_content_never_collide() -> None:
 def test_non_json_external_metadata_raises_type_error_at_construction() -> None:
     with pytest.raises(TypeError):
         CogneeDocumentSpec(content="body", external_metadata={"x": object()})
+
+
+@pytest.mark.parametrize("content", [bytearray(b"mutable"), memoryview(b"view"), 3])
+def test_document_spec_rejects_content_outside_public_contract(content: Any) -> None:
+    with pytest.raises(TypeError, match="content must be str or bytes"):
+        CogneeDocumentSpec(content=content)
+
+
+def test_document_spec_copies_and_freezes_runtime_node_sequence() -> None:
+    nodes: Any = ["first", "second"]
+    spec = CogneeDocumentSpec(content="body", node_set=nodes)
+    nodes.append("third")
+
+    assert spec.node_set == ("first", "second")
+
+
+@pytest.mark.parametrize(
+    "nodes",
+    [
+        "not-a-sequence-of-node-names",
+        ("",),
+        ("   ",),
+        ("\t\n",),
+        ("a\x00b",),
+        ("same", "same"),
+        ("valid", 3),
+    ],
+)
+def test_document_spec_rejects_invalid_node_set(nodes: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="node_set"):
+        CogneeDocumentSpec(content="body", node_set=nodes)
+
+
+@pytest.mark.parametrize("weight", [True, "heavy", float("nan"), float("inf")])
+def test_document_spec_rejects_invalid_importance_weight(weight: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="importance_weight"):
+        CogneeDocumentSpec(content="body", importance_weight=weight)
+
+
+def test_document_spec_normalizes_integer_weight_to_float() -> None:
+    spec = CogneeDocumentSpec(content="body", importance_weight=1)
+    assert spec.importance_weight == 1.0
+    assert isinstance(spec.importance_weight, float)
+
+
+@pytest.mark.parametrize("chunk_size", [0, -1, True])
+def test_cognify_profile_rejects_invalid_chunk_size(chunk_size: Any) -> None:
+    with pytest.raises(ValueError, match="chunk_size"):
+        CognifyProfile(chunk_size=chunk_size)
+
+
+@pytest.mark.parametrize("field_name", ["chunk_size", "embedding_dimensions"])
+def test_processing_config_rejects_non_positive_dimensions(field_name: str) -> None:
+    with pytest.raises(ValueError, match=field_name):
+        if field_name == "chunk_size":
+            ProcessingConfig(chunk_size=0)
+        else:
+            ProcessingConfig(embedding_dimensions=0)
+
+
+def test_processing_config_copies_normalizes_and_sorts_extras() -> None:
+    extras: Any = [["second", "2"], ["first", "1"]]
+    config = ProcessingConfig(extras=extras)
+    fingerprint = config.fingerprint()
+
+    extras[0][1] = "changed"
+
+    assert config.extras == (("first", "1"), ("second", "2"))
+    assert config.fingerprint() == fingerprint
+    assert (
+        config.fingerprint()
+        == ProcessingConfig(extras=(("second", "2"), ("first", "1"))).fingerprint()
+    )
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [
+        (("only-key",),),
+        (("", "value"),),
+        (("   ", "value"),),
+        (("key\x00bad", "value"),),
+        (("key", "value\x00bad"),),
+        (("same", "1"), ("same", "2")),
+        (("key", 1),),
+    ],
+)
+def test_processing_config_rejects_invalid_extras(extras: Any) -> None:
+    with pytest.raises((TypeError, ValueError), match="extras"):
+        ProcessingConfig(extras=extras)
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +399,23 @@ def test_derived_config_prefers_explicit_profile_values_over_defaults() -> None:
     assert explicit.chunk_size != default_chunk_size
 
 
+def test_falsey_explicit_types_do_not_fall_back_to_defaults() -> None:
+    class FalseyType(type):
+        def __bool__(cls) -> bool:
+            return False
+
+    class Graph(metaclass=FalseyType):
+        pass
+
+    class Chunker(metaclass=FalseyType):
+        pass
+
+    derived = processing_config_from_profile(CognifyProfile(graph_model=Graph, chunker=Chunker))
+
+    assert derived.graph_model_id == f"{Graph.__module__}.{Graph.__qualname__}"
+    assert derived.chunker_id == f"{Chunker.__module__}.{Chunker.__qualname__}"
+
+
 def test_custom_prompt_is_fingerprinted_not_stored() -> None:
     # The prompt itself may be long and is not needed for change detection; a
     # fingerprint is enough and keeps the tracking record small.
@@ -321,6 +475,55 @@ def test_graph_model_without_a_json_schema_degrades_to_name_only() -> None:
     assert derived.graph_model_schema_fingerprint is None
 
 
+def test_graph_model_with_broken_schema_fails_closed() -> None:
+    class BrokenSchema:
+        @classmethod
+        def model_json_schema(cls) -> dict[str, object]:
+            raise RuntimeError("broken")
+
+    with pytest.raises(ValueError, match="could not derive JSON schema"):
+        processing_config_from_profile(CognifyProfile(graph_model=BrokenSchema))
+
+
+def test_missing_runtime_model_configuration_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_compat, "configured_models", lambda: (None, None, None))
+
+    with pytest.raises(CompatibilityError, match="processing invalidation"):
+        processing_config_from_profile(CognifyProfile())
+
+
+def test_missing_embedding_dimensions_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _compat,
+        "configured_models",
+        lambda: ("configured-llm", "configured-embedding", None),
+    )
+
+    with pytest.raises(CompatibilityError, match="dimensions"):
+        processing_config_from_profile(CognifyProfile())
+
+
+@pytest.mark.parametrize("missing_default", ["graph", "chunker"])
+def test_missing_profile_type_default_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_default: str,
+) -> None:
+    compat_info = _compat.load()
+    replacement = (
+        dataclasses.replace(compat_info, default_graph_model=None)
+        if missing_default == "graph"
+        else dataclasses.replace(compat_info, default_chunker=None)
+    )
+    monkeypatch.setattr(_compat, "load", lambda: replacement)
+
+    with pytest.raises(CompatibilityError, match=missing_default):
+        processing_config_from_profile(CognifyProfile())
+
+
 # ---------------------------------------------------------------------------
 # Contract 5: document_record_for
 # ---------------------------------------------------------------------------
@@ -342,6 +545,7 @@ def test_document_record_for_copies_fingerprints_and_identity() -> None:
         annotations_fingerprint=spec.annotations_fingerprint,
         metadata_fingerprint=spec.metadata_fingerprint,
         processing_fingerprint="proc-fp",
+        importance_weight_fingerprint=spec.importance_weight_fingerprint,
         schema_version=RECORD_SCHEMA_VERSION,
     )
     assert record.schema_version == RECORD_SCHEMA_VERSION

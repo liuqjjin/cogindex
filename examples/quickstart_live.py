@@ -7,13 +7,13 @@ edits replace in place, deletions clean up derivatives.
 
 Usage:
     # with a configured LLM (see .env.example):
-    python examples/quickstart_live.py ./my-docs --search "what is X?"
+    uv run python examples/quickstart_live.py ./my-docs --search "what is X?"
 
     # without any LLM key (deterministic demo substitutes):
-    python examples/quickstart_live.py ./my-docs --deterministic
+    uv run python examples/quickstart_live.py ./my-docs --deterministic
 
     # watch continuously (Ctrl+C to stop):
-    python examples/quickstart_live.py ./my-docs --live
+    uv run python examples/quickstart_live.py ./my-docs --live
 """
 
 from __future__ import annotations

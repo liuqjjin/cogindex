@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import uuid
+from types import SimpleNamespace
 from typing import cast
 
 import cocoindex as coco
@@ -27,7 +29,10 @@ from cogindex import (
     DatasetHandle,
     DocumentPayload,
     InProcessLockProvider,
+    LockProvider,
     LockTimeoutError,
+    PostgresAdvisoryLockProvider,
+    _locks_postgres,
 )
 from cogindex._identity import fingerprint_content
 from cogindex._locks_postgres import advisory_lock_key
@@ -50,6 +55,105 @@ def _document(runtime: FakeCogneeRuntime, data_id: uuid.UUID) -> FakeDocument:
     document = runtime.document(TENANT, DATASET, data_id)
     assert document is not None
     return document
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, math.nan, math.inf, True])
+def test_in_process_lock_rejects_invalid_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="finite positive"):
+        InProcessLockProvider(timeout=timeout)
+
+
+@pytest.mark.parametrize("timeout", [0.0, -1.0, math.nan, math.inf, True])
+def test_postgres_lock_rejects_invalid_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="finite positive"):
+        PostgresAdvisoryLockProvider("postgresql://example", timeout=timeout)
+
+
+@pytest.mark.parametrize("poll_interval", [0.0, -1.0, math.nan, math.inf, True])
+def test_postgres_lock_rejects_invalid_poll_interval(poll_interval: float) -> None:
+    with pytest.raises(ValueError, match="poll_interval"):
+        PostgresAdvisoryLockProvider("postgresql://example", poll_interval=poll_interval)
+
+
+@pytest.mark.parametrize("dsn", ["", "   ", "postgresql://host/db\x00other"])
+def test_postgres_lock_rejects_empty_or_nul_dsn(dsn: str) -> None:
+    with pytest.raises(ValueError, match="dsn"):
+        PostgresAdvisoryLockProvider(dsn)
+
+
+def test_postgres_lock_rejects_non_string_dsn() -> None:
+    with pytest.raises(TypeError, match="dsn"):
+        PostgresAdvisoryLockProvider(cast(str, 123))
+
+
+@pytest.mark.parametrize("scope", ["", "bad\x00scope", 123])
+def test_lock_providers_reject_invalid_scope(scope: object) -> None:
+    providers: list[LockProvider] = [
+        InProcessLockProvider(),
+        PostgresAdvisoryLockProvider("postgresql://example"),
+    ]
+    for provider in providers:
+        with pytest.raises((TypeError, ValueError), match="scope"):
+            provider.lock(cast(str, scope))
+
+
+async def test_postgres_timeout_includes_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    never = asyncio.Event()
+
+    async def connect(dsn: str) -> None:
+        del dsn
+        await never.wait()
+
+    monkeypatch.setattr(
+        _locks_postgres,
+        "_import_asyncpg",
+        lambda: SimpleNamespace(connect=connect),
+    )
+    provider = PostgresAdvisoryLockProvider("postgresql://example", timeout=0.02)
+
+    with pytest.raises(LockTimeoutError, match="connecting"):
+        async with provider.lock("scope"):
+            pass
+
+
+async def test_postgres_cleanup_does_not_mask_body_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body_error = RuntimeError("body failed")
+    connection_closed = False
+
+    class Connection:
+        async def fetchval(self, query: str, key: int) -> bool:
+            del query, key
+            return True
+
+        async def execute(self, query: str, key: int) -> None:
+            del query, key
+            raise OSError("unlock failed")
+
+        async def close(self) -> None:
+            nonlocal connection_closed
+            connection_closed = True
+
+    async def connect(dsn: str) -> Connection:
+        del dsn
+        return Connection()
+
+    monkeypatch.setattr(
+        _locks_postgres,
+        "_import_asyncpg",
+        lambda: SimpleNamespace(connect=connect),
+    )
+    provider = PostgresAdvisoryLockProvider("postgresql://example")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        async with provider.lock("scope"):
+            raise body_error
+
+    assert exc_info.value is body_error
+    assert connection_closed
 
 
 # =============================================================================
@@ -135,7 +239,7 @@ async def test_lock_distinct_scopes_do_not_block_each_other() -> None:
 
 
 def test_advisory_lock_key_deterministic_distinct_and_in_range() -> None:
-    scopes = ["", "a", "b", "scope", "scope2", "tenant/ds", "тема", "a" * 500]
+    scopes = ["a", "b", "scope", "scope2", "tenant/ds", "тема", "a" * 500]
     keys = [advisory_lock_key(scope) for scope in scopes]
     # Deterministic: same scope always maps to the same key.
     assert keys == [advisory_lock_key(scope) for scope in scopes]
@@ -221,6 +325,24 @@ async def test_readd_same_content_different_label_keeps_complete() -> None:
     assert document.cognify_complete is True
     assert document.payload.label == "new"
     assert document.derivatives_stale is False
+
+
+async def test_readd_existing_document_does_not_update_importance_weight() -> None:
+    """Pin the Cognee 1.4 omission that requires the recreate protocol."""
+    runtime = FakeCogneeRuntime()
+    data_id = _data_id("doc-1")
+    handle = await runtime.add_documents(
+        _handle(),
+        [DocumentPayload(data_id=data_id, content="same content", importance_weight=0.25)],
+    )
+
+    await runtime.add_documents(
+        handle,
+        [DocumentPayload(data_id=data_id, content="same content", importance_weight=0.9)],
+    )
+
+    document = _document(runtime, data_id)
+    assert document.payload.importance_weight == 0.25
 
 
 async def test_purge_document_memory_resets_then_cognify_rebuilds() -> None:

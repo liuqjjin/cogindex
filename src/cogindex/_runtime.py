@@ -56,9 +56,11 @@ class CogneeRuntime(Protocol):
     library) and :class:`cogindex.testing.FakeCogneeRuntime` (tests).
 
     Every method is idempotent as observed by the caller (ADR-0003/0004):
-    deleting or purging missing data succeeds, re-adding the same payload
-    converges, cognify skips already-processed items. The write protocol's
-    convergence proof depends on these properties, not on locking.
+    data reported unambiguously as missing is a successful no-op, re-adding
+    the same payload converges, and cognify skips already-processed items.
+    Authorization and validation errors propagate. The write protocol's
+    convergence argument depends on these properties. Dataset teardown and
+    document batches must additionally share the lock described in ADR-0006.
     """
 
     async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
@@ -79,12 +81,14 @@ class CogneeRuntime(Protocol):
         self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]
     ) -> None:
         """Remove graph/vector derivatives and reset cognify status, keeping
-        raw data. Missing documents or datasets are success (no-op)."""
+        raw data. Unambiguously missing documents or datasets are a no-op;
+        authorization and validation failures propagate."""
         ...
 
     async def delete_documents(self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]) -> None:
-        """Hard-delete documents (raw data + derivatives). Missing documents
-        or datasets are success (no-op)."""
+        """Hard-delete documents (raw data + derivatives). Unambiguously
+        missing documents or datasets are a no-op; authorization and validation
+        failures propagate."""
         ...
 
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
@@ -94,8 +98,8 @@ class CogneeRuntime(Protocol):
         ...
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
-        """Remove all managed content of the dataset. Missing dataset is
-        success (no-op)."""
+        """Remove all managed content of the dataset. An unambiguously missing
+        dataset is a no-op; authorization and validation failures propagate."""
         ...
 
     async def list_documents(self, handle: DatasetHandle) -> Sequence[StoredDocument]:
@@ -104,6 +108,5 @@ class CogneeRuntime(Protocol):
         ...
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
-        """Serialize batch application per dataset (ADR-0006). An efficiency
-        and hygiene layer: correctness never depends on holding it."""
+        """Serialize document batches and teardown per dataset (ADR-0006)."""
         ...

@@ -12,17 +12,19 @@ CogneeTargetState = F(
 )
 ```
 
-After any finite sequence of declare/update/delete operations and any number
-of *recoverable* failures, retrying synchronization must converge to the state
-`F` prescribes, no stale documents, no orphaned derivatives, no duplicates.
+If the desired state stops changing, the tracking store is retained, upstream
+services recover, and failures eventually stop, a later complete
+synchronization must establish the state `F` prescribes: no stale managed
+documents, no orphaned managed derivatives, and no duplicate managed
+identities.
 
 ## Why cross-system ACID is impossible
 
 CocoIndex persists tracking state in its own embedded store (LMDB); Cognee
 persists across three stores (relational + graph + vector). There is no shared
 transaction manager, and Cognee's own writes are not atomic across its three
-stores either. Two-phase commit is unavailable at every layer. Any design
-promising atomicity would be lying.
+stores either. Two-phase commit is unavailable at every layer, so cogindex
+does not claim cross-system atomicity.
 
 ## What is promised instead
 
@@ -34,10 +36,9 @@ promising atomicity would be lying.
    multiple `prev_possible_records`; a failed create/delete additionally sets
    `prev_may_be_missing=True`. This is persisted, so uncertainty survives
    crashes and process restarts.
-2. cogindex's `reconcile()` treats uncertainty conservatively: if any possible
-   previous record differs from the desired record, or the previous state may
-   be missing, it emits a *convergent* action (replay the full
-   replace-or-create sequence). A no-op is emitted only when every possible
+2. cogindex's `reconcile()` treats uncertainty conservatively. It chooses
+   create, replace, hard recreation, metadata update, or deletion from all
+   possible previous records; a no-op is allowed only when every possible
    previous record equals the desired record and none may be missing.
 3. Every action is idempotent against Cognee:
    - `add` with an explicit `data_id` is an upsert (verified in
@@ -51,15 +52,26 @@ promising atomicity would be lying.
 
 ## Convergence argument
 
-Let `D` be the desired state. After any failure, the persisted tracking state
-either (a) equals `D` and is confirmed: retry is a no-op; or (b) records
-uncertainty: retry replays an idempotent sequence whose *post-state is `D`
-regardless of the actual Cognee state within the uncertainty set*. Each
-successful retry strictly shrinks the uncertainty set (CocoIndex commits
-collapse multi-state tracking), and no step widens it. Hence finitely many
-retries reach (a). The fault-injection matrix (`tests/`, nine injection
-points, two-worker contention) exists to demonstrate exactly this property,
-not merely to exercise error paths.
+Let `D` be a desired state that has stopped changing. A precommit can add
+another possible tracking record, so the uncertainty set is not required to
+shrink after every attempt. What matters is the next attempt that completes
+both the external sink and CocoIndex commit:
+
+1. reconciliation sees every persisted possible record and selects an action
+   that is safe for all of them;
+2. the completed external sequence establishes `D` for the managed document
+   or dataset;
+3. commit collapses the possible records to the confirmed desired record.
+
+Later retries are no-ops unless the desired state changes again. This argument
+assumes the desired state becomes stable, the tracking store is not lost,
+upstream services recover, failures are finite, and at least one complete
+sink-plus-commit attempt is allowed to finish.
+
+The fault-injection matrix and Hypothesis state machine exercise bounded
+models of the named failure windows, including failures before commit and
+two-worker contention. They are evidence for the implementation, not a proof
+of every possible upstream or deployment failure.
 
 ## Visible anomalies (documented, not hidden)
 
@@ -69,7 +81,7 @@ not merely to exercise error paths.
 - A crash after `forget(memory_only=True)` but before re-add leaves the
   document temporarily absent from search until retry (at-least-once, not
   exactly-once).
-- `verify()` exists to detect residual drift (external mutation, operator
+- `verify_dataset()` exists to detect residual drift (external mutation, operator
   error) that the model cannot prevent, e.g. a human deleting Cognee data
   behind the connector's back. It compares presence, identity, completion
   and label, but **not** whether derivatives match current content, so stale or

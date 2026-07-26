@@ -14,7 +14,9 @@ both is how they drift apart.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
+import math
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +24,7 @@ from typing import Any
 from cocoindex.connectorkits.target import ManagedBy
 
 from . import _compat
+from ._errors import CompatibilityError
 from ._identity import fingerprint_content, fingerprint_json
 from ._records import RECORD_SCHEMA_VERSION, DocumentRecord
 
@@ -50,6 +53,23 @@ class CognifyProfile:
     custom_prompt: str | None = None
     temporal_cognify: bool = False
 
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("graph_model", self.graph_model),
+            ("chunker", self.chunker),
+        ):
+            if value is not None and not isinstance(value, type):
+                raise TypeError(f"{field_name} must be a type or None")
+        chunk_size: Any = self.chunk_size
+        if chunk_size is not None and (
+            isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0
+        ):
+            raise ValueError("chunk_size must be a positive integer or None")
+        if self.custom_prompt is not None and not isinstance(self.custom_prompt, str):
+            raise TypeError("custom_prompt must be str or None")
+        if not isinstance(self.temporal_cognify, bool):
+            raise TypeError("temporal_cognify must be bool")
+
 
 @dataclass(frozen=True)
 class ProcessingConfig:
@@ -74,6 +94,34 @@ class ProcessingConfig:
     embedding_dimensions: int | None = None
     extras: tuple[tuple[str, str], ...] = ()
 
+    def __post_init__(self) -> None:
+        values: tuple[tuple[str, Any], ...] = (
+            ("chunk_size", self.chunk_size),
+            ("embedding_dimensions", self.embedding_dimensions),
+        )
+        for field_name, value in values:
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            ):
+                raise ValueError(f"{field_name} must be a positive integer or None")
+        extras: Any = self.extras
+        try:
+            normalized_extras = tuple(tuple(item) for item in extras)
+        except TypeError as exc:
+            raise TypeError("extras must be key/value string pairs") from exc
+        if any(len(item) != 2 for item in normalized_extras):
+            raise ValueError("extras must contain exactly two values per entry")
+        if any(not isinstance(part, str) for item in normalized_extras for part in item):
+            raise TypeError("extras keys and values must be strings")
+        typed_extras = tuple((item[0], item[1]) for item in normalized_extras)
+        if any(not key.strip() or "\x00" in key for key, _ in typed_extras):
+            raise ValueError("extras keys must be non-blank and contain no NUL")
+        if any("\x00" in value for _, value in typed_extras):
+            raise ValueError("extras values must not contain NUL")
+        if len({key for key, _ in typed_extras}) != len(typed_extras):
+            raise ValueError("extras keys must be unique")
+        object.__setattr__(self, "extras", tuple(sorted(typed_extras)))
+
     def fingerprint(self) -> str:
         return fingerprint_json(dataclasses.asdict(self))
 
@@ -95,8 +143,18 @@ def processing_config_from_profile(
     that model changes then no longer invalidate anything.
     """
     compat_info = _compat.load()
-    graph_model = profile.graph_model or compat_info.default_graph_model
-    chunker = profile.chunker or compat_info.default_chunker
+    graph_model = (
+        profile.graph_model if profile.graph_model is not None else compat_info.default_graph_model
+    )
+    chunker = profile.chunker if profile.chunker is not None else compat_info.default_chunker
+    if graph_model is None:
+        raise CompatibilityError(
+            "could not resolve Cognee's default graph model; pass graph_model explicitly"
+        )
+    if chunker is None:
+        raise CompatibilityError(
+            "could not resolve Cognee's default chunker; pass chunker explicitly"
+        )
     chunk_size = (
         profile.chunk_size if profile.chunk_size is not None else (compat_info.default_chunk_size)
     )
@@ -105,6 +163,11 @@ def processing_config_from_profile(
     embedding_dimensions: int | None = None
     if include_runtime_models:
         llm_model, embedding_model, embedding_dimensions = _compat.configured_models()
+        if not llm_model or not embedding_model or embedding_dimensions is None:
+            raise CompatibilityError(
+                "could not read Cognee's configured LLM, embedding model and dimensions; "
+                "processing invalidation would be incomplete"
+            )
     return ProcessingConfig(
         graph_model_id=_qualified_id(graph_model),
         graph_model_schema_fingerprint=_model_schema_fingerprint(graph_model),
@@ -147,9 +210,43 @@ class CogneeDocumentSpec:
     importance_weight: float | None = None
     content_fingerprint: str = field(init=False)
     annotations_fingerprint: str = field(init=False)
+    importance_weight_fingerprint: str = field(init=False)
     metadata_fingerprint: str = field(init=False)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.content, (str, bytes)):
+            raise TypeError(f"content must be str or bytes, got {type(self.content).__name__}")
+        if self.label is not None and not isinstance(self.label, str):
+            raise TypeError("label must be str or None")
+        if self.external_metadata is not None and not isinstance(self.external_metadata, dict):
+            raise TypeError("external_metadata must be dict or None")
+        metadata = copy.deepcopy(self.external_metadata)
+        # Validate before the spec reaches the engine and detach it from the
+        # caller's mutable object.
+        fingerprint_json(metadata)
+        object.__setattr__(self, "external_metadata", metadata)
+        node_set: Any = self.node_set
+        if node_set is None:
+            nodes: tuple[str, ...] | None = None
+        else:
+            if isinstance(node_set, (str, bytes)):
+                raise TypeError("node_set must be a sequence of strings, not str or bytes")
+            nodes = tuple(node_set)
+            if any(not isinstance(node, str) for node in nodes):
+                raise TypeError("every node_set entry must be str")
+            if any(not node.strip() or "\x00" in node for node in nodes):
+                raise ValueError("node_set entries must be non-blank and contain no NUL")
+            if len(set(nodes)) != len(nodes):
+                raise ValueError("node_set entries must be unique")
+        object.__setattr__(self, "node_set", nodes)
+        weight = self.importance_weight
+        if weight is not None:
+            if isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise TypeError("importance_weight must be a finite number or None")
+            weight = float(weight)
+            if not math.isfinite(weight):
+                raise ValueError("importance_weight must be a finite number or None")
+            object.__setattr__(self, "importance_weight", weight)
         object.__setattr__(self, "content_fingerprint", fingerprint_content(self.content))
         # node_set order is presentation detail; sorted for the fingerprint,
         # preserved as declared for the actual add() call.
@@ -158,15 +255,20 @@ class CogneeDocumentSpec:
             "annotations_fingerprint",
             fingerprint_json(
                 {
-                    "node_set": (sorted(self.node_set) if self.node_set is not None else None),
-                    "importance_weight": self.importance_weight,
+                    "external_metadata": metadata,
+                    "node_set": (sorted(nodes) if nodes is not None else None),
                 }
             ),
         )
         object.__setattr__(
             self,
+            "importance_weight_fingerprint",
+            fingerprint_json(weight),
+        )
+        object.__setattr__(
+            self,
             "metadata_fingerprint",
-            fingerprint_json({"label": self.label, "external_metadata": self.external_metadata}),
+            fingerprint_json({"label": self.label}),
         )
 
 
@@ -180,6 +282,7 @@ def document_record_for(
         annotations_fingerprint=spec.annotations_fingerprint,
         metadata_fingerprint=spec.metadata_fingerprint,
         processing_fingerprint=processing_fingerprint,
+        importance_weight_fingerprint=spec.importance_weight_fingerprint,
         schema_version=RECORD_SCHEMA_VERSION,
     )
 
@@ -191,11 +294,12 @@ def _qualified_id(cls: type[Any] | None) -> str | None:
 
 
 def _model_schema_fingerprint(model: type[Any] | None) -> str | None:
-    """Fingerprint a pydantic model's JSON schema, best-effort.
+    """Fingerprint a pydantic model's JSON schema when it exposes one.
 
     Captures structural changes to a graph model even when its qualified name
-    stays the same. A silent None (schema not derivable) still leaves
-    ``graph_model_id`` as a coarser invalidation signal.
+    stays the same. A model without ``model_json_schema`` falls back to its
+    qualified name. A declared schema method that fails is an error: silently
+    dropping the schema would make later model edits invisible.
     """
     if model is None:
         return None
@@ -204,5 +308,7 @@ def _model_schema_fingerprint(model: type[Any] | None) -> str | None:
         return None
     try:
         return fingerprint_json(schema_fn())
-    except Exception:
-        return None
+    except Exception as exc:
+        raise ValueError(
+            f"could not derive JSON schema for graph model {_qualified_id(model)!r}"
+        ) from exc

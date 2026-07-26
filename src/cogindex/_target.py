@@ -1,14 +1,13 @@
 """Two-level CocoIndex target: dataset containers with document children.
 
-This is the heart of cogindex (ADR-0003/0004/0005):
-
 - The root :class:`DatasetHandler` reconciles dataset-level configuration and
   ownership. Its sink resolves the runtime connection and hands the engine a
   :class:`DocumentHandler` for the dataset's documents.
 - :class:`DocumentHandler` reconciles individual documents into idempotent
-  write ops (upsert / replace / update_metadata / delete) and applies them in
-  batches: hard deletes, then derivative purges, then one batched add, then a
-  single incremental cognify, all under the dataset lock.
+  write ops (upsert / replace / recreate / update_metadata / delete) and
+  applies them in batches: hard deletes and recreations, then derivative
+  purges, then one batched add, then a single incremental cognify, all under
+  the dataset lock.
 
 ``reconcile()`` implementations are synchronous and perform no I/O (the
 engine calls them under a lock); every external call lives in action sinks.
@@ -16,6 +15,7 @@ engine calls them under a lock); every external call lives in action sinks.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 import uuid
@@ -32,7 +32,12 @@ import cocoindex as coco
 from cocoindex.connectorkits import statediff
 from cocoindex.connectorkits.target import ManagedBy
 
-from ._identity import document_data_id, normalize_external_key
+from ._identity import (
+    _validate_coordinate,
+    _validate_runtime_key,
+    document_data_id,
+    normalize_external_key,
+)
 from ._records import DatasetConfigRecord, DocumentRecord
 from ._runtime import CogneeRuntime, DatasetHandle, DocumentPayload
 from ._spec import (
@@ -60,7 +65,7 @@ logger = logging.getLogger("cogindex.target")
 # Document level (children of a dataset)
 # =============================================================================
 
-_DocumentOp: TypeAlias = Literal["upsert", "replace", "update_metadata", "delete"]
+_DocumentOp: TypeAlias = Literal["upsert", "replace", "recreate", "update_metadata", "delete"]
 
 
 class _DocumentAction(NamedTuple):
@@ -86,7 +91,16 @@ def _classify_write(
     derivative-affecting fields AND no record may be missing. A missing
     record could mean the last cognify never completed, or that a torn delete
     took the derivatives, so the full replace sequence must run instead.
+
+    An importance-weight change is stricter: Cognee 1.4 does not update that
+    column when re-adding an existing data_id, so every possible recorded
+    weight must match or the row is hard-deleted and recreated.
     """
+    if prev_records and any(
+        record.importance_weight_fingerprint != desired.importance_weight_fingerprint
+        for record in prev_records
+    ):
+        return "recreate"
     if diff_action in ("insert", "upsert"):
         # Uncertain previous state over a document Cognee may already hold is
         # ADR-0004's Replace trigger, not a create: a torn hard delete drops
@@ -204,7 +218,7 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
             data_id=data_id,
             content=desired_state.content,
             label=desired_state.label,
-            external_metadata=desired_state.external_metadata,
+            external_metadata=copy.deepcopy(desired_state.external_metadata),
             node_set=desired_state.node_set,
             importance_weight=desired_state.importance_weight,
         )
@@ -226,6 +240,7 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
 
         delete_ids: set[uuid.UUID] = set()
         purge_ids: set[uuid.UUID] = set()
+        recreate_ids: set[uuid.UUID] = set()
         payloads: dict[uuid.UUID, DocumentPayload] = {}
         needs_cognify = False
         for action in actions:
@@ -238,16 +253,23 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
             payloads[action.data_id] = action.payload
             if action.op == "replace":
                 purge_ids.add(action.data_id)
-            if action.op in ("upsert", "replace"):
+            elif action.op == "recreate":
+                recreate_ids.add(action.data_id)
+            if action.op in ("upsert", "replace", "recreate"):
                 needs_cognify = True
         # Never delete an identity we are about to write in the same batch.
         delete_ids -= payloads.keys()
+        # Recreate is the deliberate exception: Cognee does not update an
+        # existing row's importance_weight, so that identity must be absent
+        # before the batched add.
+        delete_ids.update(recreate_ids)
+        purge_ids -= recreate_ids
 
         started = time.monotonic()
         async with runtime.dataset_lock(handle):
-            # Order (ADR-0004): removals first so replaced/stale identities
-            # cannot linger if a later phase fails; then derivative purges;
-            # then one batched add; then a single incremental cognify.
+            # Order (ADR-0004): hard removals and recreations first so stale
+            # state cannot linger if a later phase fails; then derivative
+            # purges; then one batched add; then one incremental cognify.
             if delete_ids:
                 await runtime.delete_documents(handle, _ordered(delete_ids))
             if purge_ids:
@@ -258,10 +280,12 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
             if needs_cognify:
                 await runtime.cognify_dataset(handle, self._profile)
         logger.info(
-            "apply dataset=%s tenant=%s deletes=%d purges=%d adds=%d cognify=%s duration_ms=%.0f",
+            "apply dataset=%s tenant=%s deletes=%d recreates=%d purges=%d "
+            "adds=%d cognify=%s duration_ms=%.0f",
             handle.name,
             handle.tenant,
             len(delete_ids),
+            len(recreate_ids),
             len(purge_ids),
             len(payloads),
             needs_cognify,
@@ -305,8 +329,11 @@ def _check_dataset_key(key: coco.StableKey) -> _DatasetKey:
             and isinstance(tenant, str)
             and isinstance(dataset_name, str)
         ):
+            _validate_runtime_key(runtime_key)
+            _validate_coordinate(tenant, "tenant")
+            _validate_coordinate(dataset_name, "dataset_name")
             return _DatasetKey(runtime_key, tenant, dataset_name)
-    raise TypeError(f"dataset key must be (runtime_key, tenant, name) strs, got {key!r}")
+    raise TypeError("dataset key must be a three-item tuple of strings")
 
 
 class DatasetHandler(
@@ -365,12 +392,18 @@ async def _apply_dataset_actions(
     actions: Sequence[_DatasetAction],
     /,
 ) -> list[coco.ChildTargetDef[DocumentHandler] | None]:
+    """Apply dataset lifecycle actions and construct document handlers.
+
+    A system-managed teardown takes the same runtime-provided dataset lock as
+    document batches. Keeping the outer lock here covers every runtime without
+    requiring each ``teardown_dataset`` implementation to duplicate it.
+    """
     outputs: list[coco.ChildTargetDef[DocumentHandler] | None] = []
     for action in actions:
         runtime_obj = context_provider.get(action.key.runtime_key)
         if not isinstance(runtime_obj, CogneeRuntime):
             raise TypeError(
-                f"context key {action.key.runtime_key!r} must provide a "
+                "the dataset runtime ContextKey must provide a "
                 f"CogneeRuntime, got {type(runtime_obj).__name__}"
             )
         runtime: CogneeRuntime = runtime_obj
@@ -379,9 +412,12 @@ async def _apply_dataset_actions(
             # main_action is None here when ownership resolution said hands
             # off (user-managed data): the dataset's content is left alone.
             if action.main_action == "delete":
-                await runtime.teardown_dataset(
-                    DatasetHandle(name=action.key.dataset_name, tenant=action.key.tenant)
+                handle = DatasetHandle(
+                    name=action.key.dataset_name,
+                    tenant=action.key.tenant,
                 )
+                async with runtime.dataset_lock(handle):
+                    await runtime.teardown_dataset(handle)
                 logger.info(
                     "teardown dataset=%s tenant=%s",
                     action.key.dataset_name,
@@ -459,11 +495,16 @@ class DatasetTarget(Generic[coco.MaybePendingS], coco.ResolvesTo["DatasetTarget"
             external_key: stable logical identifier (e.g. relative path or
                 source record id). Never derive it from content.
             content: document text or bytes.
-            label / external_metadata: benign metadata; changes re-add the
-                document without rebuilding graph derivatives.
-            node_set / importance_weight: derivative-affecting annotations;
-                changes trigger purge + re-cognify (ADR-0005).
+            label: display metadata; changes re-add without rebuilding graph
+                derivatives.
+            external_metadata / node_set: derivative inputs; changes trigger
+                a memory purge and cognify.
+            importance_weight: derivative input; changes hard-delete and
+                recreate the raw row before cognify because Cognee cannot
+                update it in place.
         """
+        if isinstance(node_set, (str, bytes)):
+            raise TypeError("node_set must be a sequence of strings, not str or bytes")
         spec = CogneeDocumentSpec(
             content=content,
             label=label,
@@ -480,7 +521,7 @@ class DatasetTarget(Generic[coco.MaybePendingS], coco.ResolvesTo["DatasetTarget"
 
 
 def dataset_target(
-    runtime: coco.ContextKey[CogneeRuntime] | str,
+    runtime: coco.ContextKey[CogneeRuntime],
     name: str,
     *,
     profile: CognifyProfile | None = None,
@@ -494,10 +535,10 @@ def dataset_target(
     :func:`declare_dataset_target` / :func:`mount_dataset_target`.
 
     Args:
-        runtime: ContextKey (or its key string) under which a
-            :class:`CogneeRuntime` is provided. The key string is part of
-            every document's stable identity. Renaming it renames every
-            managed document (ADR-0002).
+        runtime: ContextKey under which a :class:`CogneeRuntime` is provided.
+            Its non-secret key string is persisted and forms part of every
+            document's stable identity. Renaming it renames every managed
+            document (ADR-0002).
         name: Cognee dataset name.
         profile: cognify parameters for this dataset.
         processing: override the auto-derived declarative config; when given,
@@ -507,12 +548,22 @@ def dataset_target(
         managed_by: "system" lets cogindex tear the dataset's content down
             when the target is unmounted; "user" leaves existing data alone.
     """
+    if not isinstance(runtime, coco.ContextKey):
+        raise TypeError("runtime must be a ContextKey; its non-secret key is persisted")
+    if profile is not None and not isinstance(profile, CognifyProfile):
+        raise TypeError(f"profile must be CognifyProfile, got {type(profile).__name__}")
+    if processing is not None and not isinstance(processing, ProcessingConfig):
+        raise TypeError(f"processing must be ProcessingConfig, got {type(processing).__name__}")
+    runtime_key = runtime.key
+    _validate_runtime_key(runtime_key)
+    _validate_coordinate(tenant, "tenant")
+    _validate_coordinate(name, "dataset_name")
     resolved_profile = profile if profile is not None else CognifyProfile()
     resolved_processing = (
         processing if processing is not None else processing_config_from_profile(resolved_profile)
     )
     key = _DatasetKey(
-        runtime_key=runtime.key if isinstance(runtime, coco.ContextKey) else runtime,
+        runtime_key=runtime_key,
         tenant=tenant,
         dataset_name=name,
     )
@@ -526,7 +577,7 @@ def dataset_target(
 
 @coco.fn
 def declare_dataset_target(
-    runtime: coco.ContextKey[CogneeRuntime] | str,
+    runtime: coco.ContextKey[CogneeRuntime],
     name: str,
     *,
     profile: CognifyProfile | None = None,
@@ -558,7 +609,7 @@ def declare_dataset_target(
 
 
 async def mount_dataset_target(
-    runtime: coco.ContextKey[CogneeRuntime] | str,
+    runtime: coco.ContextKey[CogneeRuntime],
     name: str,
     *,
     profile: CognifyProfile | None = None,

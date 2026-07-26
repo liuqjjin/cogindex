@@ -10,6 +10,7 @@ These are fake-runtime tests, not integration tests (AGENTS.md rule #7).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import TypeAlias
 
@@ -291,6 +292,39 @@ def test_unmount_system_managed_removes_all_documents() -> None:
     ds = fake.dataset("default", dataset)
     assert ds is not None
     assert len(ds.documents) == 0
+
+
+def test_unmount_lock_failure_leaves_intent_uncommitted_and_retries() -> None:
+    env, fake = _setup("unmount_lock_failure")
+    dataset = "docs_unmount_lock_failure"
+    app_name = "engine_lc_unmount_lock_failure"
+    # Track the system-managed dataset without child records, then materialize
+    # one external row. The unmount therefore has only the container teardown
+    # action, so the injected lock failure cannot be consumed by a child batch.
+    _run_app(env, app_name, dataset=dataset, docs={})
+    data_id = _data_id(dataset, "external.md")
+    asyncio.run(
+        fake.add_documents(
+            cogindex.DatasetHandle(name=dataset, tenant="default"),
+            [cogindex.DocumentPayload(data_id=data_id, content="external row")],
+        )
+    )
+    fake.calls.clear()
+    fake.inject_fault("dataset_lock")
+
+    # CocoIndex reports component cleanup failures on the update result/log
+    # rather than re-raising them from update_blocking. The sink itself is
+    # contract-tested separately to propagate the exception.
+    _run_empty_app(env, app_name)
+
+    assert fake.document("default", dataset, data_id) is not None
+    assert _ops(fake, "teardown_dataset") == []
+
+    # The failed sink did not commit NON_EXISTENCE: retry still receives the
+    # teardown intent, acquires the lock and removes the row.
+    _run_empty_app(env, app_name)
+    assert fake.document("default", dataset, data_id) is None
+    assert len(_ops(fake, "teardown_dataset")) == 1
 
 
 def test_unmount_user_managed_leaves_documents_untouched() -> None:

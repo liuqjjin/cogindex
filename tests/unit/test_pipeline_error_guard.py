@@ -48,12 +48,13 @@ def test_add_result_with_errored_run_raises() -> None:
         _raise_on_errored_runs(result, op="add", dataset="ds")
 
 
-def test_add_result_error_message_carries_payload() -> None:
-    result = _AddResult(
-        data_ingestion_info=[{"run_info": PipelineRunErrored(payload="root cause here")}]
-    )
-    with pytest.raises(CogneePipelineError, match="root cause here"):
+def test_add_result_error_message_does_not_copy_upstream_payload() -> None:
+    secret = "document-or-provider-secret"
+    result = _AddResult(data_ingestion_info=[{"run_info": PipelineRunErrored(payload=secret)}])
+    with pytest.raises(CogneePipelineError) as exc_info:
         _raise_on_errored_runs(result, op="add", dataset="ds")
+    assert secret not in str(exc_info.value)
+    assert "Cognee's own logs" in str(exc_info.value)
 
 
 def test_cognify_dict_result_with_errored_run_raises() -> None:

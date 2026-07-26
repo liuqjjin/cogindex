@@ -15,30 +15,35 @@ concurrent multi-process runs.
 Two cogindex workers materializing into the same dataset can therefore
 interleave `forget`/`add`/`cognify` in ways that are individually idempotent
 but jointly wasteful and, during replace sequences, transiently inconsistent.
+A system-managed whole-dataset teardown is another writer: without the same
+guard it can erase a dataset while another connector worker is adding or
+rebuilding one of its documents.
 
 ## Decision
 
 cogindex introduces a `LockProvider` abstraction and takes a dataset-scoped
-lock around every sink batch (the forget→add→cognify sequence for one
-dataset):
+lock around every document sink batch (the forget→add→cognify sequence for
+one dataset) and every system-managed dataset teardown:
 
 - `InProcessLockProvider`: default; `asyncio.Lock` per lock key. Correct for
   the single-process case and for tests.
-- `PostgresAdvisoryLockProvider` (extra: `cogindex[postgres]`): production
-  multi-worker implementation using PostgreSQL session-level advisory locks
-  (`pg_advisory_lock(classid, objid)` via asyncpg). Key mapping:
-  `hash64(canonical(tenant, dataset_key)) → (int32, int32)`, deterministic
-  across workers.
+- `PostgresAdvisoryLockProvider` (extra: `cogindex[postgres]`): cross-process
+  implementation using PostgreSQL session-level advisory locks. It polls
+  `pg_try_advisory_lock(bigint)` through asyncpg. Key mapping:
+  `BLAKE2b-64(canonical(tenant, dataset_key)) → signed int64`, deterministic
+  across workers. A hash collision only adds serialization; it cannot allow
+  overlapping connector writes.
 
 Contract (uniform across providers):
 
 - lock keys derive from stable logical identity (tenant/user + dataset key),
   never from connection details;
-- acquisition takes a configurable timeout and raises a diagnosable
-  `LockTimeoutError` naming the key and holder context where available;
-- locks are held for the duration of one dataset batch, released in a
-  `finally`; a crashed holder's advisory lock dies with its session
-  (PostgreSQL) or its process (in-process), no lock outlives its owner;
+- acquisition takes a configurable timeout covering connection and polling,
+  and raises `LockTimeoutError` with the logical scope and advisory key;
+- locks are held for the duration of one document batch or one teardown and
+  released in a `finally`; a crashed holder's advisory lock dies with its
+  session (PostgreSQL) or its process (in-process), no lock outlives its
+  owner;
 - lock objects and provider configuration never enter tracking records or
   target keys.
 
@@ -56,15 +61,19 @@ harmless outer guard and can be retired by configuration.
 - It serializes *cogindex workers* against each other. It cannot serialize a
   third-party process calling `cognee.cognify()` directly against the same
   dataset. That boundary is documented, not hidden.
-- Correctness does not depend on the lock: every action stays idempotent and
-  convergent (ADR-0003). The lock removes wasted duplicate cognify work and
-  shrinks the replace-sequence inconsistency window; it is an efficiency and
-  operational-hygiene mechanism layered on a design that is already safe.
+- The document action sequence remains idempotent under replay (ADR-0003),
+  and the Hypothesis model also runs with a no-op lock. This supports
+  convergence for modeled document batches after the desired state stops
+  changing.
+- Whole-dataset teardown is different: it must take the same lock as document
+  batches. Otherwise teardown can erase a dataset while a batch is rebuilding
+  it, and the older operation may finish last. The lock does not provide
+  generation fencing, so operators must not run two different desired-state
+  generations for the same dataset concurrently.
 
-  Two independent observations back that claim, and it is worth being precise
-  about which does what. The Hypothesis convergence machine still passes with
-  the dataset lock replaced by a no-op, which is the evidence that
-  convergence does not need it. What the lock *does* buy is measured by
-  `tests/unit/test_fault_matrix.py::test_concurrent_batches_serialize_under_dataset_lock`,
-  which asserts two concurrent workers produce two non-overlapping
-  lock-delimited batches and fails when the lock is removed.
+`tests/unit/test_fault_matrix.py::test_concurrent_batches_serialize_under_dataset_lock`
+asserts that two document batches do not overlap.
+`tests/unit/test_reconcile_dataset_and_apply.py::
+test_dataset_teardown_waits_for_document_batch_lock` asserts that teardown
+does not enter while a document batch holds the lock. Removing the respective
+outer lock makes each regression test fail.

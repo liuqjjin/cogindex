@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 import uuid
 from typing import Any
@@ -38,6 +39,7 @@ COGINDEX_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "cogindex")
 IDENTITY_SCHEMA_VERSION = 1
 
 _FINGERPRINT_DIGEST_SIZE = 16
+_RUNTIME_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def canonical_join(*segments: str) -> str:
@@ -68,6 +70,9 @@ def document_data_id(
     runtime_key: str, tenant: str, dataset_name: str, external_key: str
 ) -> uuid.UUID:
     """Derive the stable Cognee ``data_id`` for a document (ADR-0002)."""
+    _validate_runtime_key(runtime_key)
+    _validate_coordinate(tenant, "tenant")
+    _validate_coordinate(dataset_name, "dataset_name")
     return uuid.uuid5(
         COGINDEX_NAMESPACE,
         canonical_join(
@@ -78,6 +83,24 @@ def document_data_id(
             normalize_external_key(external_key),
         ),
     )
+
+
+def _validate_coordinate(value: str, label: str) -> None:
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be str, got {type(value).__name__}")
+    if not value:
+        raise ValueError(f"{label} must be non-empty")
+    if "\x00" in value:
+        raise ValueError(f"{label} must not contain NUL characters")
+
+
+def _validate_runtime_key(value: str) -> None:
+    _validate_coordinate(value, "runtime_key")
+    if _RUNTIME_KEY_PATTERN.fullmatch(value) is None:
+        raise ValueError(
+            "runtime_key must be 1-128 ASCII letters, digits, dots, underscores, "
+            "or hyphens, and must start with a letter or digit"
+        )
 
 
 def fingerprint_json(obj: Any) -> str:
@@ -100,8 +123,7 @@ def fingerprint_json(obj: Any) -> str:
 
 def fingerprint_content(content: str | bytes) -> str:
     """Fingerprint document content. ``str`` and ``bytes`` never collide."""
-    if isinstance(content, str):
-        payload = b"s\x00" + content.encode("utf-8")
-    else:
-        payload = b"b\x00" + bytes(content)
+    if not isinstance(content, (str, bytes)):
+        raise TypeError(f"content must be str or bytes, got {type(content).__name__}")
+    payload = b"s\x00" + content.encode("utf-8") if isinstance(content, str) else b"b\x00" + content
     return hashlib.blake2b(payload, digest_size=_FINGERPRINT_DIGEST_SIZE).hexdigest()

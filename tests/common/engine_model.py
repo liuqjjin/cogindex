@@ -4,27 +4,19 @@ Drives a :class:`cogindex._target.DocumentHandler` through full
 reconcile -> precommit -> apply -> commit cycles with the audited engine
 contract (docs/upstream-audit/cocoindex/findings.md):
 
-- tracking keeps *possible* records: committed states plus a precommitted
-  pending intent whose external write may or may not have happened;
-- a successful apply commits (collapses to the intended record, or removes
-  the key for deletes); a crashed apply leaves the multi-state in place;
-- ``prev_may_be_missing`` follows the two transitions upstream pins by test
-  (``python/tests/core/test_component_target_states.py``):
-
-  * **failed creation** (nothing was ever committed) surfaces *no* possible
-    records and ``prev_may_be_missing=True``, the sink may hold anything or
-    nothing (``test_proceed_with_failed_creation``);
-  * **failed update** (a committed record plus the intent that failed)
-    surfaces *both* records with ``prev_may_be_missing=False``, the sink is
-    guaranteed to hold one of them
-    (``test_prev_may_be_missing_after_failed_update``).
-
-  A retained *deleted* marker and lossy child invalidation both force
-  ``prev_may_be_missing=True``.
+- precommit appends the intended tracking state to the set of possible states;
+  successive failed attempts accumulate rather than overwrite one another;
+- possible states include both document records and a retained deletion marker;
+  only commit collapses them to the intended record (or removes a deleted key);
+- a failed child creation surfaces its intended record with
+  ``prev_may_be_missing=True``: the external write may have landed or not;
+- failed updates over a confirmed live record retain every attempted record
+  with ``prev_may_be_missing=False`` until a delete marker or lossy
+  invalidation introduces possible absence.
 
 Used by both the deterministic fault-matrix tests and the Hypothesis
-convergence state machine. The real engine is exercised separately in
-tests/unit/test_engine_lifecycle.py.
+convergence state machine. It is a bounded model of the transitions the tests
+exercise, not a reproduction of every engine-internal failure mode.
 """
 
 from __future__ import annotations
@@ -46,8 +38,7 @@ Output = coco.TargetReconcileOutput[_DocumentAction, DocumentRecord, None]
 class TrackEntry:
     """Emulated engine tracking state for one target key."""
 
-    committed: list[DocumentRecord]
-    pending: DocumentRecord | coco.NonExistenceType | None
+    possible_states: list[DocumentRecord | coco.NonExistenceType]
     may_be_missing: bool
 
 
@@ -71,24 +62,17 @@ class EmulatedEngine:
         outputs: list[tuple[str, Output]] = []
         for key in sorted(set(declared) | set(self.tracking)):
             entry = self.tracking.get(key)
-            prev: list[DocumentRecord] = []
-            # A fresh key, and a key whose creation failed, both surface no
-            # possible records at all and force prev_may_be_missing=True.
-            missing = True
-            if entry is not None and entry.committed:
-                prev = list(entry.committed)
-                pending = entry.pending
-                if isinstance(pending, DocumentRecord):
-                    # Failed update: the committed record and the attempted
-                    # one are both real prior sink states, so the engine
-                    # leaves prev_may_be_missing False and makes the
-                    # handler's own record comparison decide.
-                    prev.append(pending)
-                    missing = entry.may_be_missing
-                else:
-                    # A retained deleted marker means the sink may already
-                    # have removed the document.
-                    missing = entry.may_be_missing or pending is not None
+            if entry is None:
+                prev: list[DocumentRecord] = []
+                # A fresh key has no tracked external state at all.
+                missing = True
+            else:
+                prev = [
+                    state for state in entry.possible_states if isinstance(state, DocumentRecord)
+                ]
+                missing = entry.may_be_missing or any(
+                    coco.is_non_existence(state) for state in entry.possible_states
+                )
             desired: CogneeDocumentSpec | coco.NonExistenceType = declared.get(
                 key, coco.NON_EXISTENCE
             )
@@ -101,9 +85,13 @@ class EmulatedEngine:
         for key, output in outputs:
             entry = self.tracking.get(key)
             if entry is None:
-                entry = TrackEntry(committed=[], pending=None, may_be_missing=False)
+                # With no confirmed baseline, a first attempted creation may
+                # or may not have reached the external sink.
+                entry = TrackEntry(possible_states=[], may_be_missing=True)
                 self.tracking[key] = entry
-            entry.pending = output.tracking_record
+            intended = output.tracking_record
+            if not any(_same_tracking_state(state, intended) for state in entry.possible_states):
+                entry.possible_states.append(intended)
 
     async def apply(self, actions: list[_DocumentAction]) -> None:
         if actions:
@@ -115,8 +103,7 @@ class EmulatedEngine:
                 self.tracking.pop(key, None)
             else:
                 self.tracking[key] = TrackEntry(
-                    committed=[output.tracking_record],
-                    pending=None,
+                    possible_states=[output.tracking_record],
                     may_be_missing=False,
                 )
 
@@ -137,12 +124,10 @@ class EmulatedEngine:
     ) -> bool:
         """A sync whose apply is expected to crash with ``exc_type``.
 
-        Returns True if it crashed, leaving the precommitted multi-state in
-        place for :meth:`reconcile_round` to interpret. That interpretation
-        follows the two engine transitions pinned upstream (see the module
-        docstring); it is not a claim that every engine-internal detail is
-        reproduced, the real engine is exercised in
-        tests/unit/test_engine_lifecycle.py.
+        Returns True if it crashed, leaving every precommitted possible state
+        in place for :meth:`reconcile_round` to interpret. This covers sink
+        failures only; :meth:`sync_exit_after_apply` models the separate window
+        after a successful external write but before tracking commit.
 
         If the apply happened to succeed (the faulted op never ran in this
         batch), the honest engine step is to commit: done here, and False
@@ -157,6 +142,15 @@ class EmulatedEngine:
         self.commit(outputs)
         return False
 
+    async def sync_exit_after_apply(
+        self, declared: Mapping[str, CogneeDocumentSpec]
+    ) -> list[tuple[str, Output]]:
+        """Precommit and apply successfully, then exit before tracking commit."""
+        outputs = self.reconcile_round(declared)
+        self.precommit(outputs)
+        await self.apply([output.action for _, output in outputs])
+        return outputs
+
     # -- engine-side events --------------------------------------------------
 
     def invalidate_lossy(self) -> None:
@@ -167,3 +161,12 @@ class EmulatedEngine:
     def assert_fixed_point(self, declared: Mapping[str, CogneeDocumentSpec]) -> None:
         leftover = self.reconcile_round(declared)
         assert leftover == [], f"not a fixed point: {[k for k, _ in leftover]}"
+
+
+def _same_tracking_state(
+    left: DocumentRecord | coco.NonExistenceType,
+    right: DocumentRecord | coco.NonExistenceType,
+) -> bool:
+    if coco.is_non_existence(left) or coco.is_non_existence(right):
+        return coco.is_non_existence(left) and coco.is_non_existence(right)
+    return left == right

@@ -24,9 +24,19 @@ derivatives:
   the environment independently of each other,
 - cogindex's own record-schema version.
 
-Values the caller leaves unset are resolved to the installed cognee's
-effective defaults before fingerprinting, so upgrading cognee is itself a
-config change when it moves a default.
+Values the caller leaves unset are resolved from the installed Cognee
+signature before fingerprinting. The configured LLM and embedding model must
+also be readable; target construction fails if either cannot be determined,
+because continuing with a partial fingerprint could leave old derivatives
+marked current. A graph model with no JSON-schema method falls back to its
+qualified class name, while a model whose declared schema method fails is
+rejected.
+
+This does not make arbitrary Cognee upgrades transparent. A change to a
+computed upstream default that is not present in the function signature or
+model identifiers may require an explicit `ProcessingConfig` change. The
+nightly compatibility job reports upstream surface changes; supported version
+bounds remain the final gate.
 
 The fingerprint uses canonical serialization (sorted keys, explicit types), so
 dict ordering or equivalent representations cannot cause spurious changes.

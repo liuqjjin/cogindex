@@ -25,30 +25,48 @@ Status: accepted · Date: 2026-07-24
 
 ## Decision
 
-`reconcile()` classifies each document into four actions; the sink executes
-them per dataset in a fixed order.
+`reconcile()` classifies each document into five write actions; the sink
+executes them per dataset in a fixed order.
 
 **Create** (no previous record at all):
 1. `add([DataItem(data, data_id=…)], dataset_id=…)`: upsert, safe if the row
    already exists from a torn earlier attempt;
 2. one incremental `cognify(dataset)` per dataset per batch.
 
-**Replace** (content or processing fingerprint changed, or previous state
-uncertain, including a *recorded* document whose state may be missing; see
-the second amendment):
+**Replace** (content, external metadata, node-set annotations or processing
+fingerprint changed, or previous state is uncertain over a recorded document;
+see the amendments below):
 1. `forget(data_id=…, dataset_id=…, memory_only=True)`: purge old
    derivatives; harmless if none exist;
 2. `add(...)` with the *same* `data_id` and new content;
 3. incremental `cognify(dataset)`.
 
-Skipping step 1 is the classic staleness bug (old entities survive alongside
-new ones); skipping step 2 loses the document. The sequence is idempotent:
-each step tolerates the world already being in its post-state.
+Skipping step 1 leaves old entities alongside new ones; skipping step 2 loses
+the document. The sequence is idempotent: each step tolerates the world already
+being in its post-state.
+
+**Recreate** (`importance_weight` changed):
+1. hard `forget(data_id=…, dataset_id=…)`;
+2. `add(...)` with the same `data_id` and desired weight;
+3. incremental `cognify(dataset)`.
+
+The hard delete is necessary because Cognee 1.4's existing-row ingestion
+branch does not update `importance_weight`. Recreate remains retry-safe:
+deleting an absent row succeeds, and any failed attempt leaves both the old
+and intended weight fingerprints possible, so the next reconcile recreates
+again.
+
+**Metadata update** (`label` alone changed): re-add the document without a
+purge or cognify. Identical content preserves its completed pipeline status,
+and label does not shape derivatives.
 
 **Hard delete** (desired state is NON_EXISTENCE):
-1. `forget(data_id=…, dataset_id=…)`; already-missing data is success.
-   cogindex's runtime layer enforces this tolerance and a contract test pins
-   it, independent of upstream's internal behavior.
+1. `forget(data_id=…, dataset_id=…)`; a missing data item in an existing
+   dataset is already a no-op upstream. The runtime also treats an explicit
+   `DatasetNotFoundError` as success. It does not swallow
+   `UnauthorizedDataAccessError` or a generic `ValueError`: pinned Cognee uses
+   the latter for the ambiguous "not found or not accessible" case, so treating
+   it as absence could hide an authorization or configuration failure.
 
 **No-op**: all possible previous records equal the desired record and the
 previous state cannot be missing.
@@ -65,11 +83,12 @@ on, but the mechanism is Cognee's, not ours.
 
 ## Batching
 
-Actions are grouped by `(runtime, dataset)`. Within a dataset batch:
-deletes and replace-purges first, then all adds (batched), then exactly one
-`cognify`. Deterministic order (sorted by document key) keeps runs comparable
-and logs reproducible. Partial failures propagate; nothing is swallowed.
-Structured logs record phase and timing only, never content, never secrets.
+Actions are grouped by `(runtime, dataset)`. Within a dataset batch: hard
+deletes and recreate-deletes first, then replace-purges, then all adds
+(batched), then exactly one `cognify`. Document ids are sorted lexically before
+each runtime call so logs and tests are reproducible. Partial failures
+propagate; nothing is swallowed. Structured logs record phase and timing only,
+never content, never secrets.
 
 ## Dataset teardown and unmount semantics (verified against the engine)
 
@@ -79,9 +98,12 @@ more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
 
 - **System-managed** (`managed_by="system"`): the container sink calls
   `teardown_dataset`, which empties the dataset via `forget(dataset_id=...)`
-  of raw data, graph, and vector derivatives. The dataset *row* survives:
-  upstream's `empty_dataset` keeps it, and there is no public dataset-row
-  delete API. Documented as an upstream limitation, not papered over.
+  of raw data, graph, and vector derivatives. The sink holds the same
+  runtime-provided dataset lock used by document add/replace batches, so a
+  whole-dataset teardown cannot interleave with a connector document write.
+  The dataset *row* survives: upstream's `empty_dataset` keeps it, and there
+  is no public dataset-row delete API. Documented as an upstream limitation,
+  rather than treated as successful row deletion.
 - **User-managed** (`managed_by="user"`): `resolve_system_transition` yields
   no action; the runtime observes **zero mutating calls**. Note the
   consequence: the engine drops child tracking when the container goes away
@@ -109,6 +131,36 @@ unchanged content is preserved by ingestion's own content-hash comparison
 and the cognify-side incremental gate is unaffected. Found by, and pinned in,
 `tests/integration/test_local_cognee.py`; the initial code audit
 missed the gate's routing condition.
+
+## Amendment: external metadata changes require replacement
+
+The original record split treated `external_metadata` like a label and used a
+bare re-add when it changed. Cognee 1.4 uses this metadata during document
+classification: `node_set` creates graph membership, and DLT metadata can
+change document type and schema edges. A bare re-add updates the relational
+row but does not remove or rebuild those derivatives.
+
+`external_metadata` is therefore part of `annotations_fingerprint`. Any change
+uses Replace; only `label` remains on the metadata-only path. Record schema
+version 2 forces records created under the old classification to rebuild.
+
+## Amendment: importance weight changes require recreation
+
+The original annotations fingerprint combined `node_set` and
+`importance_weight`, sending both changes through memory-only Replace. That
+protocol preserves the raw Data row. In Cognee 1.4, the existing-row branch of
+`ingest_data` updates content and metadata but omits `importance_weight`; only
+the new-row branch writes it. Purge + re-add + cognify therefore rebuilds
+derivatives from the old weight and can commit a permanently false tracking
+state.
+
+`importance_weight` now has a separate fingerprint. A mismatch selects
+Recreate, while external metadata and node-set changes continue to use
+memory-only Replace. The field was added during the existing record-schema-2
+migration and has an empty legacy default: old records remain decodable, but
+the sentinel cannot equal a real fingerprint and forces one conservative
+recreation. A real local integration test reads the relational Data row and
+pins `0.25 → 0.9`.
 
 ## Amendment: uncertain state over a recorded document is Replace, not Create
 

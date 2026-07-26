@@ -107,6 +107,21 @@ class TestDocumentDataId:
             "rt", "tenant", "ds", "key"
         )
 
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    @pytest.mark.parametrize("bad_value", ["", "bad\x00value"])
+    def test_rejects_invalid_identity_coordinates(self, position: int, bad_value: str) -> None:
+        coordinates = ["rt", "tenant", "ds"]
+        coordinates[position] = bad_value
+        with pytest.raises(ValueError):
+            document_data_id(coordinates[0], coordinates[1], coordinates[2], "key")
+
+    def test_rejects_url_or_dsn_shaped_runtime_key_without_echoing_it(self) -> None:
+        secret = "postgresql://user:password@db/internal"
+        with pytest.raises(ValueError) as exc_info:
+            document_data_id(secret, "tenant", "ds", "key")
+
+        assert "password" not in str(exc_info.value)
+
 
 class TestFingerprintContent:
     def test_str_and_bytes_never_collide(self) -> None:
@@ -124,6 +139,10 @@ class TestFingerprintContent:
         for fp in (fingerprint_content("a"), fingerprint_content(b"a")):
             assert len(fp) == 32
             assert set(fp) <= _HEX_DIGITS
+
+    def test_rejects_mutable_bytes_like_content(self) -> None:
+        with pytest.raises(TypeError, match="str or bytes"):
+            fingerprint_content(bytearray(b"a"))  # type: ignore[arg-type]
 
 
 class TestFingerprintJson:

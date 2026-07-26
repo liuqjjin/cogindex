@@ -59,8 +59,9 @@ class CogneeCompat:
     cognee: ModuleType
     version: str
     data_item_cls: type[Any]
-    # Exceptions that mean "the dataset is gone / not visible", treated as
-    # success by idempotent delete paths (ADR-0004).
+    # Exceptions that unambiguously mean "the dataset is gone", treated as
+    # success by idempotent delete paths. Authorization and generic validation
+    # errors must not be collapsed into absence (ADR-0004).
     dataset_missing_errors: tuple[type[BaseException], ...]
     # Effective defaults cognify() would use if we pass nothing, captured
     # from its signature so processing fingerprints track the *actual*
@@ -291,10 +292,9 @@ def _dataset_missing_errors() -> tuple[type[BaseException], ...]:
         exceptions_module = importlib.import_module("cognee.modules.data.exceptions")
     except ImportError:
         return ()
-    for name in ("DatasetNotFoundError", "UnauthorizedDataAccessError"):
-        error_cls = getattr(exceptions_module, name, None)
-        if isinstance(error_cls, type) and issubclass(error_cls, BaseException):
-            errors.append(error_cls)
+    error_cls = getattr(exceptions_module, "DatasetNotFoundError", None)
+    if isinstance(error_cls, type) and issubclass(error_cls, BaseException):
+        errors.append(error_cls)
     return tuple(errors)
 
 

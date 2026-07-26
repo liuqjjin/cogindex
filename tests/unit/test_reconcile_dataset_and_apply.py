@@ -6,14 +6,17 @@ invalidation, ownership-aware deletion, and key validation.
 
 Part B drives ``DocumentHandler._apply`` directly over a
 :class:`FakeCogneeRuntime`, with actions produced by real ``reconcile()``
-calls, asserting the ADR-0004 batch protocol: deletes, then purges, then one
-batched add, then a single incremental cognify: all under the dataset lock,
-which is released even on failure.
+calls, asserting the ADR-0004 batch protocol: hard deletes and recreations,
+then purges, then one batched add, then a single incremental cognify, all
+under the dataset lock, which is released even on failure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, cast
 
 import cocoindex as coco
@@ -23,7 +26,7 @@ from cocoindex.connectorkits.target import ManagedBy
 
 from cogindex._identity import document_data_id
 from cogindex._records import DatasetConfigRecord, DocumentRecord
-from cogindex._runtime import DatasetHandle, DocumentPayload
+from cogindex._runtime import CogneeRuntime, DatasetHandle, DocumentPayload
 from cogindex._spec import (
     CogneeDatasetSpec,
     CogneeDocumentSpec,
@@ -31,7 +34,13 @@ from cogindex._spec import (
     ProcessingConfig,
     document_record_for,
 )
-from cogindex._target import DatasetHandler, DocumentHandler, _DocumentAction
+from cogindex._target import (
+    DatasetHandler,
+    DocumentHandler,
+    _apply_dataset_actions,
+    _DocumentAction,
+    dataset_target,
+)
 from cogindex.testing import FakeCogneeRuntime, InjectedFault
 
 # =============================================================================
@@ -39,6 +48,7 @@ from cogindex.testing import FakeCogneeRuntime, InjectedFault
 # =============================================================================
 
 _KEY = ("rt", "default", "ds")
+_PUBLIC_RUNTIME_KEY = coco.ContextKey[CogneeRuntime]("dataset-target-validation-runtime")
 
 
 def _dataset_spec(
@@ -139,6 +149,71 @@ def test_bad_dataset_keys_raise_type_error() -> None:
         handler.reconcile("just-a-string", spec, [], False)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        ("", "default", "ds"),
+        ("rt", "", "ds"),
+        ("rt", "default", ""),
+        ("rt\x00other", "default", "ds"),
+    ],
+)
+def test_empty_or_nul_dataset_coordinates_raise_value_error(
+    key: tuple[str, str, str],
+) -> None:
+    with pytest.raises(ValueError):
+        DatasetHandler().reconcile(key, _dataset_spec(), [], False)
+
+
+def test_dataset_target_rejects_secret_runtime_keys_without_echoing_them() -> None:
+    secret_runtime_key: Any = "postgresql://user:password@db/example"
+    with pytest.raises(TypeError) as raw_exc:
+        dataset_target(
+            secret_runtime_key,
+            "docs",
+            processing=ProcessingConfig(),
+        )
+
+    assert "password" not in str(raw_exc.value)
+
+    wrapped_secret = coco.ContextKey[CogneeRuntime](secret_runtime_key)
+    with pytest.raises(ValueError) as wrapped_exc:
+        dataset_target(
+            wrapped_secret,
+            "docs",
+            processing=ProcessingConfig(),
+        )
+
+    assert "password" not in str(wrapped_exc.value)
+
+    with pytest.raises(ValueError) as handler_exc:
+        DatasetHandler().reconcile(
+            (secret_runtime_key, "default", "docs"),
+            _dataset_spec(),
+            [],
+            False,
+        )
+
+    assert "password" not in str(handler_exc.value)
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("profile", object()),
+        ("processing", object()),
+    ],
+)
+def test_dataset_target_rejects_invalid_config_types_immediately(
+    argument: str,
+    value: object,
+) -> None:
+    kwargs: dict[str, Any] = {argument: value}
+
+    with pytest.raises(TypeError, match=argument):
+        dataset_target(_PUBLIC_RUNTIME_KEY, "docs", **kwargs)
+
+
 # =============================================================================
 # Part B: DocumentHandler._apply batching over FakeCogneeRuntime
 # =============================================================================
@@ -147,6 +222,64 @@ _RUNTIME_KEY = "rt"
 _TENANT = "default"
 _DATASET = "ds"
 _PROCESSING_FP = "processing-fp-1"
+
+
+class _ControlledLockRuntime(FakeCogneeRuntime):
+    """Expose exactly when teardown contends with a document batch."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_entered = asyncio.Event()
+        self.release_add = asyncio.Event()
+        self.teardown_lock_attempted = asyncio.Event()
+        self.teardown_lock_acquired = asyncio.Event()
+        self.teardown_entered = asyncio.Event()
+        self.timeline: list[str] = []
+        self._gate = asyncio.Lock()
+        self._lock_attempts = 0
+
+    async def add_documents(
+        self,
+        handle: DatasetHandle,
+        payloads: Sequence[DocumentPayload],
+    ) -> DatasetHandle:
+        self.add_entered.set()
+        await self.release_add.wait()
+        return await super().add_documents(handle, payloads)
+
+    async def teardown_dataset(self, handle: DatasetHandle) -> None:
+        self.timeline.append("teardown_enter")
+        self.teardown_entered.set()
+        await super().teardown_dataset(handle)
+
+    def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
+        return self._controlled_lock(handle)
+
+    @asynccontextmanager
+    async def _controlled_lock(self, handle: DatasetHandle) -> AsyncIterator[None]:
+        del handle
+        self._lock_attempts += 1
+        attempt = self._lock_attempts
+        self.timeline.append(f"lock_attempt:{attempt}")
+        if attempt == 2:
+            self.teardown_lock_attempted.set()
+        async with self._gate:
+            self.timeline.append(f"lock_acquire:{attempt}")
+            if attempt == 2:
+                self.teardown_lock_acquired.set()
+            try:
+                yield
+            finally:
+                self.timeline.append(f"lock_release:{attempt}")
+
+
+class _ContextProviderStub:
+    def __init__(self, runtime: CogneeRuntime) -> None:
+        self._runtime = runtime
+
+    def get(self, key: str) -> CogneeRuntime:
+        assert key == _RUNTIME_KEY
+        return self._runtime
 
 
 def _doc_handler(fake: FakeCogneeRuntime) -> DocumentHandler:
@@ -279,6 +412,108 @@ async def test_update_metadata_only_batch_adds_without_cognify_or_purge() -> Non
     assert "add_documents" in ops
     assert "cognify_dataset" not in ops
     assert "purge_document_memory" not in ops
+
+
+async def test_importance_weight_change_hard_deletes_then_recreates() -> None:
+    fake = FakeCogneeRuntime()
+    handler = _doc_handler(fake)
+    data_id = _data_id("weighted")
+    old_spec = CogneeDocumentSpec(content="same content", importance_weight=0.25)
+    handle = await fake.add_documents(
+        DatasetHandle(name=_DATASET, tenant=_TENANT),
+        [
+            DocumentPayload(
+                data_id=data_id,
+                content=old_spec.content,
+                importance_weight=old_spec.importance_weight,
+            )
+        ],
+    )
+    await fake.cognify_dataset(handle, CognifyProfile())
+    fake.calls.clear()
+    action = _action_for(
+        handler,
+        "weighted",
+        CogneeDocumentSpec(content="same content", importance_weight=0.9),
+        [_prev_doc_record("weighted", old_spec)],
+        False,
+    )
+    assert action.op == "recreate"
+
+    await handler._apply(cast(Any, None), [action])
+
+    ops = [call[0] for call in fake.calls]
+    assert (
+        ops.index("lock_acquire")
+        < ops.index("delete_documents")
+        < ops.index("add_documents")
+        < ops.index("cognify_dataset")
+        < ops.index("lock_release")
+    )
+    assert "purge_document_memory" not in ops
+    document = fake.document(_TENANT, _DATASET, data_id)
+    assert document is not None
+    assert document.payload.importance_weight == 0.9
+    assert document.cognify_complete is True
+
+
+async def test_dataset_teardown_waits_for_document_batch_lock() -> None:
+    runtime = _ControlledLockRuntime()
+    handler = _doc_handler(runtime)
+    document_action = _action_for(
+        handler,
+        "held",
+        CogneeDocumentSpec(content="document batch holds the lock"),
+        [],
+        True,
+    )
+    document_task = asyncio.create_task(handler._apply(cast(Any, None), [document_action]))
+    await asyncio.wait_for(runtime.add_entered.wait(), timeout=1)
+
+    dataset_output = DatasetHandler().reconcile(
+        (_RUNTIME_KEY, _TENANT, _DATASET),
+        coco.NON_EXISTENCE,
+        [_prev_dataset_record(_PROCESSING_FP, ManagedBy.SYSTEM)],
+        False,
+    )
+    assert dataset_output is not None
+    assert dataset_output.action.main_action == "delete"
+    provider = cast(coco.ContextProvider, _ContextProviderStub(runtime))
+    teardown_task = asyncio.create_task(_apply_dataset_actions(provider, [dataset_output.action]))
+    await asyncio.wait_for(runtime.teardown_lock_attempted.wait(), timeout=1)
+
+    acquired_while_document_held_lock = runtime.teardown_lock_acquired.is_set()
+    entered_while_document_held_lock = runtime.teardown_entered.is_set()
+    runtime.release_add.set()
+    document_outputs, teardown_outputs = await asyncio.gather(
+        document_task,
+        teardown_task,
+    )
+
+    assert document_outputs is None
+    assert teardown_outputs == [None]
+    assert acquired_while_document_held_lock is False
+    assert entered_while_document_held_lock is False
+    assert runtime.teardown_entered.is_set()
+    assert runtime.timeline.index("lock_release:1") < runtime.timeline.index("teardown_enter")
+
+
+async def test_dataset_teardown_lock_failure_propagates_before_runtime_call() -> None:
+    runtime = FakeCogneeRuntime()
+    runtime.inject_fault("dataset_lock")
+    dataset_output = DatasetHandler().reconcile(
+        (_RUNTIME_KEY, _TENANT, _DATASET),
+        coco.NON_EXISTENCE,
+        [_prev_dataset_record(_PROCESSING_FP, ManagedBy.SYSTEM)],
+        False,
+    )
+    assert dataset_output is not None
+    provider = cast(coco.ContextProvider, _ContextProviderStub(runtime))
+
+    with pytest.raises(InjectedFault):
+        await _apply_dataset_actions(provider, [dataset_output.action])
+
+    assert all(call[0] != "teardown_dataset" for call in runtime.calls)
 
 
 async def test_delete_only_batch_only_deletes() -> None:

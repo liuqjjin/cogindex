@@ -22,9 +22,9 @@ Audited constraints:
 ## Decision
 
 A `CogneeRuntime` Protocol exposes only the operations the connector needs:
-ensure/resolve dataset, upsert documents with explicit data ids, forget item
-memory, forget item, cognify dataset, inspect status/provenance, optional
-search, and a dataset-scoped lock hook.
+resolve a dataset, add documents with explicit data ids, forget item memory,
+forget an item, cognify a dataset, list stored document status, tear down
+managed content, and acquire a dataset-scoped lock.
 
 - **`LocalCogneeRuntime`** (supported): drives the Cognee Python SDK.
   All version-sensitive imports live in `cogindex/_compat.py`, which performs
@@ -33,8 +33,28 @@ search, and a dataset-scoped lock hook.
   keyword signature as expected) and raises one actionable error otherwise.
   No scattered private imports; no monkey-patching.
 - **`FakeCogneeRuntime`** (tests): deterministic in-memory reference
-  implementation with injectable fault points; the contract test suite runs
-  against both Fake and Local to keep them honest.
+  implementation with injectable fault points. Focused real-Cognee tests pin
+  the upstream behavior that the fake models.
+
+### Local runtime boundaries
+
+Cognee's storage roots are process-global configuration, not instance fields.
+`LocalCogneeRuntime` therefore requires both `data_root` and `system_root`.
+Two live local runtimes may share the same normalized pair; constructing a
+different pair while either is alive fails. Before setup and every direct
+operation, the runtime also checks that outside code has not changed the
+effective roots.
+
+The connector-level `tenant` coordinate is supported by the general protocol,
+but `LocalCogneeRuntime` accepts only `"default"`. Physical Cognee tenancy is
+selected by its `user` object. Letting two arbitrary connector tenant strings
+point to the same physical dataset would give them different document ids and
+lock keys while teardown still empties the shared dataset.
+
+Dataset lookup is owner-scoped. A shared dataset with the same name is not
+selected implicitly, and duplicate owned matches fail instead of using list
+order. This keeps a name-only declaration from writing into a dataset merely
+shared with the acting user.
 
 ### No remote runtime in 0.1
 
@@ -60,6 +80,8 @@ endpoint, which is filed as `docs/upstream-proposals/0002`.
 - One supported path instead of two half-paths. `LocalCogneeRuntime` requires
   the caller to run Cognee in-process, which is the honest cost of stable
   identity today.
+- Local storage and tenant restrictions are explicit rather than treating
+  process-global Cognee configuration as instance or tenant isolation.
 - Upgrading Cognee changes exactly one module. `tests/unit/test_compat.py`
   pins the imported surface, so a breaking upstream change fails in CI
   (including the nightly upstream-compatibility job) rather than at runtime.

@@ -15,8 +15,8 @@ import msgspec
 __all__ = ["RECORD_SCHEMA_VERSION", "DatasetConfigRecord", "DocumentRecord"]
 
 # Bump when the record layout below changes incompatibly. Old records then
-# always diff as "replace", forcing a conservative rebuild.
-RECORD_SCHEMA_VERSION = 1
+# differ from the desired state and force a conservative rebuild.
+RECORD_SCHEMA_VERSION = 2
 
 
 class DatasetConfigRecord(msgspec.Struct, frozen=True):
@@ -34,10 +34,15 @@ class DocumentRecord(msgspec.Struct, frozen=True):
     - ``data_id``: the derived stable identity, recorded for observability
       and drift verification.
     - ``content_fingerprint`` / ``annotations_fingerprint`` /
-      ``processing_fingerprint`` / ``schema_version``: derivative-affecting,
-      any difference forces purge + re-add + cognify.
-    - ``metadata_fingerprint``: benign, a difference re-adds (metadata
-      upsert) without purging graph/vector derivatives.
+      ``processing_fingerprint`` / ``schema_version``: derivative-affecting;
+      a difference forces purge + re-add + cognify.
+    - ``importance_weight_fingerprint``: a difference forces hard deletion
+      and recreation because Cognee 1.4 does not update the weight on an
+      existing raw data row. The empty default keeps older records decodable
+      and deliberately makes their unknown weight differ from every real
+      fingerprint.
+    - ``metadata_fingerprint``: label-only metadata; a difference re-adds the
+      document without purging graph/vector derivatives.
     """
 
     data_id: uuid.UUID
@@ -45,4 +50,5 @@ class DocumentRecord(msgspec.Struct, frozen=True):
     annotations_fingerprint: str
     metadata_fingerprint: str
     processing_fingerprint: str
+    importance_weight_fingerprint: str = ""
     schema_version: int = RECORD_SCHEMA_VERSION

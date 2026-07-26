@@ -1,19 +1,18 @@
 """Model-based convergence property (ADR-0003).
 
-A Hypothesis state machine drives arbitrary interleavings of document
-declarations, removals, processing-config changes, successful syncs, and
-syncs that crash at every phase of the write protocol (lock acquisition,
-deletes, purges, partial adds, cognify), against the emulated engine
-tracking semantics in tests/common/engine_model.py.
+A Hypothesis state machine samples bounded interleavings of document
+declarations, removals, processing-config changes, successful syncs, sink
+failures (lock acquisition, deletes, purges, partial adds, cognify), and an
+exit after successful apply but before tracking commit. Tracking behavior is
+the explicit model in tests/common/engine_model.py.
 
-The property: **any successful sync converges**, the fake Cognee state
-equals the reference model (exactly the declared documents, fresh
-derivatives, current config), reconciliation reaches a fixed point, and no
-sequence of prior crashes can break this. Safety holds even after crashed
-syncs: nothing exists that was never declared, and locks stay balanced.
-
-Validated by mutation testing: disabling the purge phase or misclassifying
-replaces as metadata-only makes this machine fail.
+For every generated sequence, a completed ``sync_ok`` must leave Fake Cognee
+equal to the reference state (exactly the declared documents, fresh
+derivatives, current config) and reconciliation at a fixed point. Safety
+checks also run after failed steps. This is randomized evidence over the
+modeled transitions, not an exhaustive proof of every CocoIndex or Cognee
+failure mode; named deterministic regressions pin the known critical
+sequences.
 """
 
 from __future__ import annotations
@@ -157,6 +156,11 @@ class ConvergenceMachine(RuleBasedStateMachine):
         """Process dies between precommit and the first external write."""
         outputs = self.engine.reconcile_round(self.declared)
         self.engine.precommit(outputs)
+
+    @rule()
+    def sync_exit_after_apply(self) -> None:
+        """External apply succeeds, then the process exits before commit."""
+        self.loop.run_until_complete(self.engine.sync_exit_after_apply(self.declared))
 
     # -- safety, checked after every step ------------------------------------
 

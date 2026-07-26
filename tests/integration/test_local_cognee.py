@@ -138,6 +138,23 @@ async def graph_node_names(dataset_id: uuid.UUID) -> set[str]:
     return names
 
 
+async def stored_importance_weight(data_id: uuid.UUID) -> float | None:
+    """Read the raw Cognee Data row; the public read model omits this field."""
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from sqlalchemy import select
+
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        row = (await session.scalars(select(Data).where(Data.id == data_id))).one()
+    value = row.importance_weight
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)):
+        raise TypeError(f"unexpected importance_weight type: {type(value).__name__}")
+    return float(value)
+
+
 # ---------------------------------------------------------------------------
 # runtime-level contract: lifecycle, replace protocol, shared entities
 # ---------------------------------------------------------------------------
@@ -251,18 +268,14 @@ async def test_batch_purge_opens_one_database_context_for_the_whole_batch(
     assert all(not stored.cognify_complete for stored in await runtime.list_documents(handle))
 
 
-async def test_metadata_only_readd_upserts_in_place_and_keeps_derivatives(
+async def test_label_only_readd_upserts_in_place_and_keeps_derivatives(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
     """The upstream assumption behind the update_metadata write op.
 
-    ADR-0005 routes a label or external-metadata change to a bare re-add: no
-    derivative purge, no cognify. That is only safe if re-adding identical
-    content leaves the item's pipeline status COMPLETED, so the subsequent
-    cognify (whenever one next runs for another reason) still skips it, and if
-    the metadata actually lands. Both halves were previously asserted only
-    against the in-memory fake, which is circular: the fake was written from
-    the same reading of upstream that the claim rests on.
+    A label change uses a bare re-add: no derivative purge and no cognify.
+    It is safe only if re-adding identical content preserves the completed
+    pipeline status and stores the new label.
     """
     dataset = "int_metadata"
     data_id = did(dataset, "doc.md")
@@ -284,7 +297,6 @@ async def test_metadata_only_readd_upserts_in_place_and_keeps_derivatives(
                 data_id=data_id,
                 content=content,
                 label="second",
-                external_metadata={"revision": 2},
             )
         ],
     )
@@ -294,8 +306,7 @@ async def test_metadata_only_readd_upserts_in_place_and_keeps_derivatives(
     assert stored.label == "second"
     # Status survived, so cognify's gate will keep skipping this item.
     assert stored.cognify_complete is True
-    # Nothing was re-extracted: same content means no LLM work, which is the
-    # entire reason metadata changes take the cheap path.
+    # A label change does not require extraction.
     assert llm_mock.call_count == calls_after_cognify
     assert await graph_node_names(handle.dataset_id) == entities_before
 
@@ -352,6 +363,36 @@ async def _app_main(dataset: str, docs: dict[str, str]) -> None:
         target.declare_document(key, content, label=f"label-{key}")
 
 
+@coco.fn
+async def _external_metadata_app_main(dataset: str, node_set: str) -> None:
+    target = await coco.use_mount(
+        cogindex.declare_dataset_target,
+        _RUNTIME_KEY,
+        dataset,
+        processing=cogindex.ProcessingConfig(graph_model_id="integration.Model"),
+    )
+    target.declare_document(
+        "doc.md",
+        "Bob works for AlphaCorp.",
+        external_metadata={"node_set": [node_set]},
+    )
+
+
+@coco.fn
+async def _importance_weight_app_main(dataset: str, importance_weight: float) -> None:
+    target = await coco.use_mount(
+        cogindex.declare_dataset_target,
+        _RUNTIME_KEY,
+        dataset,
+        processing=cogindex.ProcessingConfig(graph_model_id="integration.Model"),
+    )
+    target.declare_document(
+        "doc.md",
+        "Bob works for AlphaCorp.",
+        importance_weight=importance_weight,
+    )
+
+
 async def test_engine_end_to_end_with_real_cognee(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
@@ -402,3 +443,68 @@ async def test_engine_end_to_end_with_real_cognee(
     assert report.ok, report.render()
     stored = await runtime.list_documents(handle)
     assert [document.data_id for document in stored] == [did(dataset, "bob.md")]
+
+
+async def test_external_metadata_change_rebuilds_derivatives(
+    runtime: LocalCogneeRuntime, llm_mock: AsyncMock
+) -> None:
+    dataset = "int_external_metadata"
+    env = create_test_env(__file__, suffix="external_metadata")
+    env.context_provider.provide(_RUNTIME_KEY, runtime)
+
+    async def run(node_set: str) -> None:
+        app = coco.App(
+            coco.AppConfig(name="int_external_metadata", environment=env),
+            _external_metadata_app_main,
+            dataset=dataset,
+            node_set=node_set,
+        )
+        await app.update().result()
+
+    await run("FirstSet")
+    calls_after_first = llm_mock.call_count
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    assert handle.dataset_id is not None
+    assert "firstset" in await graph_node_names(handle.dataset_id)
+
+    await run("SecondSet")
+
+    assert llm_mock.call_count > calls_after_first
+    names = await graph_node_names(handle.dataset_id)
+    assert "firstset" not in names
+    assert "secondset" in names
+    (stored,) = await runtime.list_documents(handle)
+    assert stored.external_metadata is not None
+    assert stored.external_metadata["node_set"] == ["SecondSet"]
+
+
+async def test_importance_weight_change_recreates_raw_data_row(
+    runtime: LocalCogneeRuntime, llm_mock: AsyncMock
+) -> None:
+    """Cognee's existing-row add path omits importance_weight updates."""
+    dataset = "int_importance_weight"
+    data_id = did(dataset, "doc.md")
+    env = create_test_env(__file__, suffix="importance_weight")
+    env.context_provider.provide(_RUNTIME_KEY, runtime)
+
+    async def run(importance_weight: float) -> None:
+        app = coco.App(
+            coco.AppConfig(name="int_importance_weight", environment=env),
+            _importance_weight_app_main,
+            dataset=dataset,
+            importance_weight=importance_weight,
+        )
+        await app.update().result()
+
+    await run(0.25)
+    assert await stored_importance_weight(data_id) == pytest.approx(0.25)
+    calls_after_first = llm_mock.call_count
+
+    await run(0.9)
+
+    assert await stored_importance_weight(data_id) == pytest.approx(0.9)
+    assert llm_mock.call_count > calls_after_first
+    calls_after_recreate = llm_mock.call_count
+
+    await run(0.9)
+    assert llm_mock.call_count == calls_after_recreate

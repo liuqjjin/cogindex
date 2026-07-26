@@ -45,17 +45,17 @@ never collide by concatenation.
 *fingerprints* stored in the tracking record:
 
 - `content_fingerprint`: over the normalized document payload;
-- `annotations_fingerprint`: over node-set and importance weight;
-- `metadata_fingerprint`: over label and external metadata;
+- `annotations_fingerprint`: over external metadata and node-set;
+- `importance_weight_fingerprint`: over importance weight;
+- `metadata_fingerprint`: over the label;
 - `processing_fingerprint`: over everything else that affects derivatives
   (ADR-0005).
 
-The split between the last two is the whole point of having four values
-rather than two. Content, annotations and processing config all change what
-cognify derives, so a difference in any of them forces the full replace
-sequence. Label and external metadata do not, so a difference there is a
-metadata upsert that leaves the graph alone. Collapsing them would make every
-label edit pay for a re-extraction.
+Content, external metadata, annotations and processing config can change
+Cognee derivatives, so a difference forces replacement. Importance weight is
+separate because Cognee cannot update it on an existing row; a difference
+forces hard recreation instead (ADR-0004). The label can be updated without
+extraction.
 
 Fingerprints decide *what action to take*; `data_id` decides *which Cognee row
 is acted upon*.
@@ -68,6 +68,11 @@ which is precisely the staleness bug this project exists to prevent.
 
 ## Consequences
 
+- `runtime_key` is persisted for ContextProvider lookup, so it is limited to
+  1–128 ASCII letters, digits, dots, underscores or hyphens and must start
+  with a letter or digit. This admits ordinary logical names while rejecting
+  URL and DSN forms. It is still caller-chosen and must not contain an opaque
+  credential.
 - The caller must provide a stable external key per document (e.g. a relative
   file path). Normalization is deliberately minimal: NFC only, so that two
   Unicode spellings of the same name are one identity, plus rejection of

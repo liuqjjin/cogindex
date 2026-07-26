@@ -8,7 +8,7 @@ never mutates anything.
 from __future__ import annotations
 
 import importlib.metadata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from . import _compat
@@ -29,7 +29,10 @@ class DoctorFinding:
 
 @dataclass(frozen=True)
 class DoctorReport:
-    findings: list[DoctorFinding] = field(default_factory=list)
+    findings: tuple[DoctorFinding, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "findings", tuple(self.findings))
 
     @property
     def ok(self) -> bool:
@@ -51,7 +54,7 @@ def doctor() -> DoctorReport:
     findings.append(_check_cognee_compat())
     findings.extend(_check_storage_roots())
     findings.extend(_check_credentials())
-    return DoctorReport(findings=findings)
+    return DoctorReport(findings=tuple(findings))
 
 
 def _check_cocoindex() -> DoctorFinding:
@@ -103,7 +106,7 @@ def _check_storage_roots() -> list[DoctorFinding]:
         if "site-packages" in path:
             findings.append(
                 DoctorFinding(
-                    severity="warning",
+                    severity="critical",
                     check="storage-roots",
                     detail=f"{label} points inside the installed package: {path}",
                     fix_hint=(
@@ -130,7 +133,7 @@ def _check_credentials() -> list[DoctorFinding]:
         elif state is False:
             findings.append(
                 DoctorFinding(
-                    severity="warning",
+                    severity="critical",
                     check=f"{label}-credentials",
                     detail=f"no {label} credentials configured; cognify will fail",
                     fix_hint="set LLM_API_KEY (and embedding config) in the environment",

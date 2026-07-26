@@ -94,12 +94,13 @@ def test_cognify_pipeline_name_and_completion_status_literals_match_upstream() -
     assert _compat.COGNIFY_PIPELINE_NAME in source
 
 
-def test_dataset_missing_errors_resolve_to_real_exception_types() -> None:
-    # An empty tuple here would silently turn "the dataset vanished under us"
-    # into a hard failure of an operation ADR-0004 requires to be idempotent.
+def test_only_dataset_not_found_is_classified_as_missing() -> None:
+    # UnauthorizedDataAccessError and ValueError may mean a permission,
+    # argument, or configuration failure. Treating them as absence would turn
+    # a failed delete into false success.
     errors = _compat.load().dataset_missing_errors
     resolved = {error.__name__ for error in errors}
-    assert {"DatasetNotFoundError", "UnauthorizedDataAccessError"} <= resolved
+    assert resolved == {"DatasetNotFoundError"}
 
 
 # ---------------------------------------------------------------------------

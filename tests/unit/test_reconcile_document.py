@@ -1,8 +1,9 @@
 """DocumentHandler.reconcile decision matrix (pure, no engine).
 
-Covers the ADR-0003/0004/0005 write-op classification: upsert vs replace vs
-update_metadata vs delete, plus the deliberate statediff deviations, stale
-identity collection, key validation, and payload/tracking-record contents.
+Covers the ADR-0003/0004/0005 write-op classification: upsert, replace,
+recreate, update_metadata and delete, plus the deliberate statediff
+deviations, stale identity collection, key validation, and payload/tracking
+record contents.
 """
 
 from __future__ import annotations
@@ -137,7 +138,7 @@ def test_content_change_replaces() -> None:
 
 
 def test_metadata_only_change_updates_metadata() -> None:
-    spec = make_spec(label="new label", external_metadata={"a": 1})
+    spec = make_spec(label="new label")
     prev = record_for(make_spec(label="old label"))
     assert prev.metadata_fingerprint != spec.metadata_fingerprint
     assert prev.content_fingerprint == spec.content_fingerprint
@@ -146,6 +147,61 @@ def test_metadata_only_change_updates_metadata() -> None:
     assert output is not None
     assert output.action.op == "update_metadata"
     assert output.action.payload == payload_for(spec)
+
+
+def test_external_metadata_change_replaces() -> None:
+    spec = make_spec(external_metadata={"node_set": ["new"]})
+    prev = record_for(make_spec(external_metadata={"node_set": ["old"]}))
+    assert prev.annotations_fingerprint != spec.annotations_fingerprint
+    assert prev.metadata_fingerprint == spec.metadata_fingerprint
+
+    output = reconcile(make_handler(), spec, [prev], False)
+
+    assert output is not None
+    assert output.action.op == "replace"
+    assert output.action.payload == payload_for(spec)
+
+
+def test_importance_weight_change_recreates() -> None:
+    spec = make_spec(importance_weight=0.9)
+    prev = record_for(make_spec(importance_weight=0.25))
+    assert prev.importance_weight_fingerprint != spec.importance_weight_fingerprint
+    assert prev.annotations_fingerprint == spec.annotations_fingerprint
+
+    output = reconcile(make_handler(), spec, [prev], False)
+
+    assert output is not None
+    assert output.action.op == "recreate"
+    assert output.action.payload == payload_for(spec)
+
+
+def test_record_without_weight_fingerprint_recreates_once() -> None:
+    spec = make_spec(importance_weight=0.9)
+    prev = DocumentRecord(
+        data_id=data_id_for(KEY),
+        content_fingerprint=spec.content_fingerprint,
+        annotations_fingerprint=spec.annotations_fingerprint,
+        metadata_fingerprint=spec.metadata_fingerprint,
+        processing_fingerprint=PFP,
+    )
+    assert prev.importance_weight_fingerprint == ""
+
+    output = reconcile(make_handler(), spec, [prev], False)
+
+    assert output is not None
+    assert output.action.op == "recreate"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_failed_weight_recreate_retries_as_recreate(missing: bool) -> None:
+    old = record_for(make_spec(importance_weight=0.25))
+    spec = make_spec(importance_weight=0.9)
+    attempted = record_for(spec)
+
+    output = reconcile(make_handler(), spec, [old, attempted], missing)
+
+    assert output is not None
+    assert output.action.op == "recreate"
 
 
 def test_metadata_only_retry_after_failed_update_still_updates_metadata() -> None:

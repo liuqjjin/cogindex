@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import unicodedata
 import uuid
+from typing import Any
+
+import cocoindex as coco
+import pytest
 
 import cogindex
 from cogindex import (
@@ -11,18 +15,20 @@ from cogindex import (
     DatasetHandle,
     DocumentPayload,
     ExpectedDocument,
+    _compat,
+    _doctor,
     doctor,
     verify_dataset,
 )
 from cogindex.testing import FakeCogneeRuntime
 
-RUNTIME_KEY = "rt-verify"
+RUNTIME_KEY = coco.ContextKey[cogindex.CogneeRuntime]("rt-verify")
 TENANT = "default"
 DATASET = "ds-verify"
 
 
 def did(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY, TENANT, DATASET, key)
+    return cogindex.document_data_id(RUNTIME_KEY.key, TENANT, DATASET, key)
 
 
 def payload(key: str, content: str, *, label: str | None = None) -> DocumentPayload:
@@ -56,7 +62,7 @@ async def test_verify_ok_when_state_matches() -> None:
     )
     assert report.ok
     assert report.checked == 2
-    assert report.issues == []
+    assert report.issues == ()
 
 
 async def test_verify_reports_missing_document() -> None:
@@ -146,6 +152,121 @@ async def test_verify_key_normalization_matches_target_identity() -> None:
     assert report.ok
 
 
+async def test_verify_rejects_duplicate_normalized_identity() -> None:
+    nfc = "café.md"
+    nfd = unicodedata.normalize("NFD", nfc)
+    runtime = FakeCogneeRuntime()
+
+    with pytest.raises(ValueError, match="duplicate logical identity"):
+        await verify_dataset(
+            runtime,
+            RUNTIME_KEY,
+            DATASET,
+            [ExpectedDocument(nfc), ExpectedDocument(nfd)],
+            tenant=TENANT,
+        )
+
+
+@pytest.mark.parametrize(
+    ("runtime_key", "dataset", "tenant"),
+    [
+        (coco.ContextKey[cogindex.CogneeRuntime](""), DATASET, TENANT),
+        (coco.ContextKey[cogindex.CogneeRuntime]("bad\x00key"), DATASET, TENANT),
+        (RUNTIME_KEY, "", TENANT),
+        (RUNTIME_KEY, "bad\x00dataset", TENANT),
+        (RUNTIME_KEY, DATASET, ""),
+        (RUNTIME_KEY, DATASET, "bad\x00tenant"),
+    ],
+)
+async def test_verify_validates_coordinates_even_without_expected_documents(
+    runtime_key: coco.ContextKey[cogindex.CogneeRuntime],
+    dataset: str,
+    tenant: str,
+) -> None:
+    with pytest.raises(ValueError):
+        await verify_dataset(
+            FakeCogneeRuntime(),
+            runtime_key,
+            dataset,
+            [],
+            tenant=tenant,
+        )
+
+
+async def test_verify_rejects_secret_runtime_keys_without_echoing_them() -> None:
+    secret_runtime_key: Any = "postgresql://user:verify-password@db/example"
+
+    with pytest.raises(TypeError) as raw_exc:
+        await verify_dataset(
+            FakeCogneeRuntime(),
+            secret_runtime_key,
+            DATASET,
+            [],
+        )
+
+    assert "verify-password" not in str(raw_exc.value)
+
+    wrapped_secret = coco.ContextKey[cogindex.CogneeRuntime](secret_runtime_key)
+    with pytest.raises(ValueError) as wrapped_exc:
+        await verify_dataset(
+            FakeCogneeRuntime(),
+            wrapped_secret,
+            DATASET,
+            [],
+        )
+
+    assert "verify-password" not in str(wrapped_exc.value)
+
+
+async def test_verify_rejects_duplicate_stored_identity() -> None:
+    class DuplicateRuntime(FakeCogneeRuntime):
+        async def list_documents(self, handle: DatasetHandle) -> list[cogindex.StoredDocument]:
+            stored = await super().list_documents(handle)
+            return [*stored, *stored]
+
+    runtime = DuplicateRuntime()
+    await seed(runtime, [payload("a.md", "alpha")])
+
+    with pytest.raises(RuntimeError, match="duplicate stored data_id"):
+        await verify_dataset(
+            runtime,
+            RUNTIME_KEY,
+            DATASET,
+            [ExpectedDocument("a.md")],
+            tenant=TENANT,
+        )
+
+
+def test_reports_copy_mutable_input_collections() -> None:
+    issue = cogindex.VerificationIssue(
+        kind="missing",
+        data_id=uuid.uuid4(),
+        external_key="a.md",
+        detail="missing",
+    )
+    issues: Any = [issue]
+    report = cogindex.VerificationReport(
+        dataset=DATASET,
+        tenant=TENANT,
+        checked=1,
+        issues=issues,
+    )
+    issues.clear()
+    assert not report.ok
+    assert report.issues == (issue,)
+
+    finding = cogindex.DoctorFinding(
+        severity="critical",
+        check="credentials",
+        detail="missing",
+    )
+    findings: Any = [finding]
+    doctor_report = cogindex.DoctorReport(findings=findings)
+    findings.clear()
+    assert not doctor_report.ok
+    assert doctor_report.findings == (finding,)
+
+
 async def test_verify_render_lists_every_issue() -> None:
     runtime = FakeCogneeRuntime()
     await seed(runtime, [payload("stale.md", "old")], cognify=False)
@@ -180,3 +301,14 @@ def test_doctor_runs_and_reports_installed_versions() -> None:
     rendered = report.render()
     assert "cogindex doctor" in rendered
     assert "cognee-compat" in rendered
+
+
+def test_missing_required_credentials_make_doctor_not_ok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_compat, "credentials_present", lambda: (False, False))
+
+    findings = _doctor._check_credentials()
+
+    assert {finding.severity for finding in findings} == {"critical"}
+    assert not cogindex.DoctorReport(findings=tuple(findings)).ok

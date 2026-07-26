@@ -1,10 +1,12 @@
 """Deterministic fault-injection matrix (ADR-0003/0004).
 
-Each test crashes one specific phase of the write protocol, then proves the
-next sync converges. Scenarios 1-5 and 10 additionally assert the exact
-mid-crash external state (what landed, what didn't); 6-9 assert only the
-recovery. Complements the randomized Hypothesis machine in tests/property/
-with named, reviewable scenarios:
+Each test exercises one specific failure window against Fake Cognee and the
+explicit tracking model, then asserts that a subsequent successful sync
+converges. Scenarios 1-5 and 10 additionally assert the exact mid-crash
+external state (what landed, what didn't); 6-9 assert only the recovery.
+These are named, reviewable regressions for the modeled transitions, not an
+exhaustive proof of every upstream failure mode. They complement the bounded
+randomized Hypothesis machine in tests/property/:
 
  1. crash before any external write (lock acquisition)
  2. crash after hard deletes, before purges
@@ -18,6 +20,9 @@ with named, reviewable scenarios:
 10. torn hard delete (derivatives gone, row and COMPLETED status kept),
     then the same content is declared again
 11. a metadata-only update crashes, and the retry stays metadata-only
+12. successive failed intents accumulate without losing an intermediate state
+13. successful create, replace, delete, and label writes followed by exit
+    before tracking commit
 
 Plus: concurrent batches on one dataset are serialized by the dataset lock.
 """
@@ -27,6 +32,8 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Mapping
+
+import cocoindex as coco
 
 import cogindex
 from cogindex import CognifyProfile, DatasetHandle, DocumentPayload
@@ -287,8 +294,9 @@ async def test_stale_identity_crash_mid_cleanup() -> None:
     )
     await fake.cognify_dataset(handle, PROFILE_A)
     engine.tracking["a.md"] = TrackEntry(
-        committed=[document_record_for(spec_a, data_id=old_id, processing_fingerprint="pfp-A")],
-        pending=None,
+        possible_states=[
+            document_record_for(spec_a, data_id=old_id, processing_fingerprint="pfp-A")
+        ],
         may_be_missing=False,
     )
 
@@ -387,6 +395,154 @@ async def test_metadata_only_update_retry_preserves_derivatives() -> None:
     assert ops(fake, "purge_document_memory") == []
     assert len(ops(fake, "cognify_dataset")) == cognifies_before
     engine.assert_fixed_point(relabelled)
+
+
+# =============================================================================
+# 12. Every failed intent remains a possible record
+# =============================================================================
+
+
+async def test_failed_intents_accumulate_and_prevent_a_false_fixed_point() -> None:
+    """A later precommit must not overwrite an earlier failed write intent.
+
+    Sequence:
+      1. v1 commits;
+      2. v2 reaches add, then cognify fails, so the external raw row is v2;
+      3. desired reverts to v1, but the retry dies before any external write.
+
+    If step 3 overwrote the sole pending slot, tracking would contain only v1
+    and reconciliation would report a false fixed point over external v2.
+    CocoIndex retains both v1 and v2 as possible states, so the next retry must
+    still emit a replace.
+    """
+    fake, engine = make_stack()
+    v1 = {"a.md": spec("v1")}
+    v2 = {"a.md": spec("v2")}
+    await engine.sync(v1)
+
+    fake.inject_fault("cognify_dataset")
+    assert await engine.sync_expect_crash(v2, InjectedFault)
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.content == "v2"
+
+    fake.inject_fault("dataset_lock")
+    assert await engine.sync_expect_crash(v1, InjectedFault)
+
+    expected_records = [
+        document_record_for(v1["a.md"], data_id=did("a.md"), processing_fingerprint="pfp-A"),
+        document_record_for(v2["a.md"], data_id=did("a.md"), processing_fingerprint="pfp-A"),
+    ]
+    entry = engine.tracking["a.md"]
+    assert entry.possible_states == expected_records
+    assert entry.may_be_missing is False
+
+    retry = engine.reconcile_round(v1)
+    assert len(retry) == 1
+    assert retry[0][1].action.op == "replace"
+    await engine.sync(v1)
+    assert_converged(fake, engine, v1, PROFILE_A)
+
+
+# =============================================================================
+# 13. External apply succeeds, process exits before tracking commit
+# =============================================================================
+
+
+async def test_create_apply_succeeds_then_exit_before_commit_converges() -> None:
+    fake, engine = make_stack()
+    declared = {"a.md": spec("alpha")}
+
+    outputs = await engine.sync_exit_after_apply(declared)
+    assert [output.action.op for _, output in outputs] == ["upsert"]
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.cognify_complete
+
+    entry = engine.tracking["a.md"]
+    assert len(entry.possible_states) == 1
+    assert entry.may_be_missing is True
+    retry = engine.reconcile_round(declared)
+    assert len(retry) == 1
+    assert retry[0][1].action.op == "replace"
+
+    await engine.sync(declared)
+    assert_converged(fake, engine, declared, PROFILE_A)
+
+
+async def test_replace_apply_succeeds_then_exit_before_commit_converges() -> None:
+    fake, engine = make_stack()
+    await engine.sync({"a.md": spec("v1")})
+    fake.calls.clear()
+    desired = {"a.md": spec("v2")}
+
+    outputs = await engine.sync_exit_after_apply(desired)
+    assert [output.action.op for _, output in outputs] == ["replace"]
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.content == "v2"
+    assert document.derived_fragments == {fingerprint_content("v2")}
+
+    entry = engine.tracking["a.md"]
+    assert len(entry.possible_states) == 2
+    assert entry.may_be_missing is False
+    retry = engine.reconcile_round(desired)
+    assert len(retry) == 1
+    assert retry[0][1].action.op == "replace"
+
+    await engine.sync(desired)
+    assert len(ops(fake, "purge_document_memory")) == 2
+    assert_converged(fake, engine, desired, PROFILE_A)
+
+
+async def test_delete_apply_succeeds_then_exit_before_commit_converges() -> None:
+    fake, engine = make_stack()
+    await engine.sync({"a.md": spec("alpha")})
+    fake.calls.clear()
+
+    outputs = await engine.sync_exit_after_apply({})
+    assert [output.action.op for _, output in outputs] == ["delete"]
+    assert fake.document(TENANT, DATASET, did("a.md")) is None
+
+    entry = engine.tracking["a.md"]
+    assert any(coco.is_non_existence(state) for state in entry.possible_states)
+    retry = engine.reconcile_round({})
+    assert len(retry) == 1
+    assert retry[0][1].action.op == "delete"
+
+    await engine.sync({})
+    assert engine.tracking == {}
+    dataset = fake.dataset(TENANT, DATASET)
+    assert dataset is not None
+    assert dataset.documents == {}
+
+
+async def test_label_apply_succeeds_then_exit_before_commit_stays_metadata_only() -> None:
+    fake, engine = make_stack()
+    await engine.sync({"a.md": labelled("alpha", "first")})
+    fake.calls.clear()
+    desired = {"a.md": labelled("alpha", "second")}
+
+    outputs = await engine.sync_exit_after_apply(desired)
+    assert [output.action.op for _, output in outputs] == ["update_metadata"]
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.label == "second"
+
+    entry = engine.tracking["a.md"]
+    assert len(entry.possible_states) == 2
+    assert entry.may_be_missing is False
+    retry = engine.reconcile_round(desired)
+    assert len(retry) == 1
+    assert retry[0][1].action.op == "update_metadata"
+
+    await engine.sync(desired)
+    document = fake.document(TENANT, DATASET, did("a.md"))
+    assert document is not None
+    assert document.payload.label == "second"
+    assert ops(fake, "purge_document_memory") == []
+    assert ops(fake, "cognify_dataset") == []
+    engine.assert_fixed_point(desired)
 
 
 # =============================================================================
