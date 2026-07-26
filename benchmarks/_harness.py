@@ -1,8 +1,7 @@
-"""Benchmark harness: environment fingerprinting, metrics, report writing.
+"""Benchmark environment metadata, metrics, and report writing.
 
-Reports are machine-specific by nature. They are written to
-``benchmarks/reports/`` (gitignored) and are never quoted in the README,
-regenerate locally to compare like with like.
+Reports are written to ``benchmarks/reports/``. Wall-clock results are only
+comparable when the code, dependencies, machine, and scenario match.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ def _git_commit() -> str:
         if git is None:
             return "unknown"
         out = subprocess.run(  # noqa: S603 - fixed argv, resolved binary
-            [git, "rev-parse", "--short", "HEAD"],
+            [git, "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=True,
@@ -53,6 +52,23 @@ def _git_commit() -> str:
         return out.stdout.strip()
     except Exception:
         return "unknown"
+
+
+def _git_dirty() -> bool | None:
+    try:
+        git = shutil.which("git")
+        if git is None:
+            return None
+        out = subprocess.run(  # noqa: S603 - fixed argv, resolved binary
+            [git, "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=Path(__file__).resolve().parent.parent,
+        )
+        return bool(out.stdout.strip())
+    except Exception:
+        return None
 
 
 def environment_fingerprint(mode: str, profile: str) -> dict[str, Any]:
@@ -68,6 +84,7 @@ def environment_fingerprint(mode: str, profile: str) -> dict[str, Any]:
         "cocoindex": _package_version("cocoindex"),
         "cognee": _package_version("cognee"),
         "git_commit": _git_commit(),
+        "git_dirty": _git_dirty(),
     }
 
 
@@ -99,8 +116,8 @@ def write_report(
     lines = [
         f"# cogindex benchmark report: {env['timestamp_utc']}",
         "",
-        "> Machine-specific numbers. Regenerate locally; never compare across",
-        "> machines or quote in documentation. Mode "
+        "> Machine-specific numbers. Compare only reports produced from the same",
+        "> code, dependency set, machine, and scenario. Mode "
         f"`{env['mode']}`: "
         + (
             "connector layer over an in-memory fake Cognee: measures cogindex "

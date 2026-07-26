@@ -1,11 +1,11 @@
 [project]
 name = "cogindex"
 version = "0.1.0"
-description = "Incremental, declarative materialization of CocoIndex-managed documents into Cognee knowledge graphs (a CocoIndex custom target connector)"
+description = "Keep CocoIndex-managed documents and their Cognee knowledge graph in sync"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "cogindex contributors" }]
+authors = [{ name = "liuqjjin" }]
 requires-python = ">=3.11,<3.14"
 keywords = ["cocoindex", "cognee", "knowledge-graph", "incremental", "rag", "etl"]
 classifiers = [
@@ -43,6 +43,7 @@ dev = [
     "coverage[toml]>=7.6",
     "testcontainers[postgres]>=4.9",
     "pip-audit>=2.7",
+    "pre-commit>=4.2",
 ]
 
 [build-system]
@@ -112,3 +113,7 @@ markers = [
 [tool.coverage.run]
 source = ["src/cogindex"]
 branch = true
+
+[tool.coverage.report]
+fail_under = 89
+show_missing = true

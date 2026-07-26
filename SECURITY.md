@@ -17,12 +17,13 @@ cogindex holds no credentials of its own and opens no listening sockets. Its
 security-relevant surface is narrow, and these are the properties worth
 attacking:
 
-- **Secrets must not reach persistent state.** Target keys and tracking
-  records are written to CocoIndex's store and are expected to contain only
-  logical identifiers. A path that puts a DSN, an API key, or raw document
-  content into a tracking record, a target key, or a log line is a bug in this
-  category, and there is a test for the log case
-  (`test_apply_logs_never_contain_document_content`).
+- **Connector data must not copy secrets into persistent state.** Target keys
+  and tracking records are written to CocoIndex's store. Runtime names are
+  restricted to a 1–128 character logical-identifier grammar, which rejects
+  URL and DSN forms; logs and records do not copy runtime objects, upstream
+  error payloads or document content. Tests cover those paths. A caller-chosen
+  opaque API key made only of allowed characters cannot be distinguished from
+  a logical name, so the `ContextKey` itself must still be non-secret.
 - **Document identity must not be forgeable across tenants or datasets.**
   `data_id` is a `uuid5` over length-prefixed logical coordinates
   (`docs/adr/0002`). An input that makes two distinct
@@ -32,6 +33,17 @@ attacking:
   handed to Cognee; it never reaches a query, a path, or a shell.
 - **The PostgreSQL lock provider takes a DSN.** It is passed straight to
   `asyncpg`; the scope string is hashed, never interpolated.
+
+## Known dependency advisory
+
+Cognee 1.4.0 transitively installs `diskcache` 5.6.3, which is affected by
+[PYSEC-2026-2447 / GHSA-w8v5-vhqr-4h9v](https://github.com/advisories/GHSA-w8v5-vhqr-4h9v).
+Exploitation requires an attacker who can write to the cache directory. Keep
+Cognee's cache and storage directories writable only by the service account.
+
+No fixed `diskcache` release is currently available. CI ignores only
+`PYSEC-2026-2447`; every other `pip-audit` finding remains blocking. Remove
+that exemption as soon as Cognee or `diskcache` provides an upgrade path.
 
 ## What is out of scope here
 

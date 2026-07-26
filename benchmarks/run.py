@@ -1,8 +1,7 @@
-"""Benchmark CLI: ``python -m benchmarks.run --profile smoke``.
+"""Benchmark CLI: ``uv run python -m benchmarks.run --profile smoke``.
 
-Reports land in benchmarks/reports/ (gitignored) as JSON + Markdown with a
-full environment fingerprint. Numbers are machine-specific; regenerate
-locally, never quote in documentation.
+Reports are written to benchmarks/reports/ as JSON and Markdown with code,
+dependency, and machine metadata.
 """
 
 from __future__ import annotations
@@ -72,11 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     code = main()
-    # Hard exit rather than returning through the interpreter's shutdown. In
-    # real mode cognee leaves its graph-worker harness running on non-daemon
-    # threads, so a normal exit blocks in threading._shutdown long after the
-    # reports are on disk (observed: half an hour). Everything this process
-    # owns is already flushed by here.
+    # Cognee leaves non-daemon graph-worker threads alive in real mode.
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)

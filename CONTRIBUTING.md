@@ -23,7 +23,7 @@ make test-postgres          # needs Docker or POSTGRES_DSN
 make test-llm               # opt-in, needs LLM_API_KEY
 ```
 
-`make ci` mirrors the required GitHub Actions job exactly.
+`make ci` runs the core checks used by GitHub Actions on the current interpreter.
 
 ## Ground rules
 

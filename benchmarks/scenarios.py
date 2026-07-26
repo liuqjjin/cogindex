@@ -1,12 +1,11 @@
-"""ADR-0003's operational claims, measured.
+"""Benchmark scenarios for synchronization, deletion, recovery, and verification.
 
-0. baseline_comparison  what a hand-rolled integration does instead (see
-                        baseline.py; real mode only)
+0. baseline_comparison  disabled until its storage isolation is rebuilt
 1. initial_ingest       first sync of N documents
-2. incremental_update   resync after changing K of N (work proportional to K)
+2. incremental_update   resync after changing K of N
 3. freshness            per-change sync latency distribution
-4. deletion             removing K of N converges and costs O(K)
-5. crash_recovery       cost of converging after a mid-batch crash (fake mode)
+4. deletion             remove K of N documents
+5. crash_recovery       retry after an injected mid-batch failure (fake mode)
 6. verify_read          drift verification read path over N documents
 
 Modes:
@@ -16,8 +15,7 @@ Modes:
   deterministic LLM/embedding substitutes: measures the full local pipeline
   without model latency. Much smaller document counts.
 
-Everything runs inside ONE asyncio loop (``await app.update().result()``):
-cognee caches async engines per loop and they must not cross loops.
+All scenarios use one asyncio loop because Cognee caches async engines per loop.
 """
 
 from __future__ import annotations
@@ -75,7 +73,7 @@ def _docs(n: int, *, version: int = 0, changed_first: int = 0) -> dict[str, str]
 
 
 class BenchContext:
-    """One isolated benchmark world: engine environment + runtime."""
+    """Isolated CocoIndex environment and Cognee runtime for one scenario."""
 
     def __init__(self, mode: str, label: str) -> None:
         self.mode = mode
@@ -92,10 +90,7 @@ class BenchContext:
             )
         self.env.context_provider.provide(RUNTIME_KEY, self.runtime)
         self.dataset = f"bench_{label}"
-        # One App per context, docs passed through a mutable holder: repeated
-        # update() calls on the same app/name are what gives the engine
-        # tracking continuity between syncs (and sidesteps app re-registration
-        # after a crashed run keeps the previous instance alive).
+        # Reuse one App so repeated updates share the same tracking history.
         self._docs_holder: dict[str, dict[str, str]] = {"docs": {}}
         self._app = coco.App(
             coco.AppConfig(name=f"bench_{label}", environment=self.env),
@@ -120,14 +115,7 @@ class BenchContext:
         return time.perf_counter() - started
 
     def llm_calls(self) -> int:
-        """Extraction calls issued so far, or -1 when no LLM is in play.
-
-        The metric that survives leaving this machine. Wall-clock here is
-        mostly database overhead, because the LLM is a deterministic stub; in
-        production a single extraction is seconds of latency and a line on an
-        invoice, so "how many documents got re-extracted" is what a reader
-        should compare, and it does not depend on the hardware.
-        """
+        """Return extraction call count, or -1 when the mode has no LLM."""
         if self.mode != "real":
             return -1
         from cognee.infrastructure.llm import LLMGateway
@@ -165,10 +153,7 @@ def deterministic_llm() -> Iterator[None]:
         if response_model is SummarizedContent:
             return SummarizedContent(summary="bench summary", description="bench summary")
         if response_model is KnowledgeGraph:
-            # One node per document, named after the document's own marker
-            # token. Distinctness matters: the baseline comparison counts graph
-            # nodes that no current document supports, and a stub that collapsed
-            # different documents onto one node would hide exactly that.
+            # Keep marker tokens distinct so per-document changes remain visible.
             token = next(
                 (
                     word.rstrip(".,")
@@ -218,8 +203,6 @@ async def bench_incremental_update(mode: str, sizes: dict[str, int]) -> BenchRes
     llm_after_full = ctx.llm_calls()
     adds_before = ctx.added_ids()
 
-    # A re-run with nothing changed. The floor for any incremental system, and
-    # the one an integration without stable identity cannot reach.
     unchanged_seconds = await ctx.sync(_docs(n))
     llm_after_unchanged = ctx.llm_calls()
 
@@ -246,10 +229,9 @@ async def bench_incremental_update(mode: str, sizes: dict[str, int]) -> BenchRes
         {"n_docs": n, "k_changes": k, "mode": mode},
         metrics,
         notes=(
-            "Work must scale with the change set, not the corpus. In fake mode "
-            "that shows up as wasted_writes == 0; in real mode as extraction "
-            "calls: a re-run with nothing changed must cost zero, and changing "
-            f"{k} of {n} documents must cost far fewer than a full sync."
+            "Reports writes in fake mode and extraction calls in real mode. "
+            f"The scenario changes {k} of {n} documents; no complexity claim "
+            "is inferred from one sample."
         ),
     )
 
@@ -271,7 +253,7 @@ async def bench_freshness(mode: str, sizes: dict[str, int]) -> BenchResult:
             "p95_ms": round(percentile(latencies, 0.95) * 1000, 1),
             "mean_ms": round(sum(latencies) / len(latencies) * 1000, 1),
         },
-        notes="latency from a single-document change to a fully converged sync.",
+        notes="elapsed time for one single-document update run.",
     )
 
 
@@ -333,8 +315,7 @@ async def bench_crash_recovery(mode: str, sizes: dict[str, int]) -> BenchResult:
             "total_writes_including_retry": writes_total,
             "minimum_possible_writes": k,
         },
-        notes="retry overhead = total writes minus the change set; convergence "
-        "after the crash is the correctness claim being measured.",
+        notes="observed writes and end state after one injected failure and retry.",
     )
 
 

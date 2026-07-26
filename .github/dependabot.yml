@@ -3,29 +3,33 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "chore"
 
-  # cocoindex and cognee are pinned to audited ranges and bumped by hand,
-  # because a bump means re-running the audit ledger and the integration tier
-  # (see CONTRIBUTING). Dependabot handles the dev toolchain only.
-  #
-  # lockfile-only on purpose. The floors in pyproject are the oldest versions
-  # this library is willing to support, which is a decision rather than a
-  # number to keep current; raising them narrows what a consumer can resolve
-  # against for no benefit. The lockfile is what developers and CI actually
-  # install, so that is what gets updated.
+  # CocoIndex and Cognee are audited against pinned upstream commits, so their
+  # upgrades remain manual. Dependabot can still refresh every other resolved
+  # dependency without changing the supported-version floors in pyproject.toml.
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: monthly
     versioning-strategy: lockfile-only
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore"
     groups:
-      dev-tooling:
+      resolved-dependencies:
         patterns: ["*"]
     ignore:
       - dependency-name: cocoindex
       - dependency-name: cognee
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore"
