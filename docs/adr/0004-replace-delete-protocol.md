@@ -104,13 +104,14 @@ more. Engine-verified behavior (tests/unit/test_engine_lifecycle.py):
   The dataset *row* survives: upstream's `empty_dataset` keeps it, and there
   is no public dataset-row delete API. Documented as an upstream limitation,
   rather than treated as successful row deletion.
-- **User-managed** (`managed_by="user"`): `resolve_system_transition` yields
-  no action; the runtime observes **zero mutating calls**. Note the
-  consequence: the engine drops child tracking when the container goes away
-  without issuing per-document deletes, so documents that cogindex itself
-  added remain in the dataset. `managed_by="user"` therefore means "cogindex
-  never destroys anything in this dataset", not "cogindex removes only what
-  it added". Users who want managed cleanup must use `managed_by="system"`.
+- **User-managed** (`managed_by="user"`): on target unmount,
+  `resolve_system_transition` yields no action and the runtime observes
+  **zero mutating calls**. The engine drops child tracking without issuing
+  per-document deletes, so documents that cogindex itself added remain in the
+  dataset. While the target is still mounted, document reconciliation is
+  unchanged: a tracked key that stops being declared is deleted normally.
+  This option controls whole-dataset teardown; it is not per-document
+  ownership.
 
 A dataset that never materialized (declared but nothing was ever added)
 tears down as a no-op: `teardown_dataset` resolves the name, finds no

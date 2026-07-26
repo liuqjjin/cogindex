@@ -181,7 +181,7 @@ make ci
 ```
 
 CI covers Linux and macOS on Python 3.11, 3.12, and 3.13, strict mypy, Ruff,
-286 unit tests, a 60-example × 40-step Hypothesis state machine, a local
+287 unit tests, a 60-example × 40-step Hypothesis state machine, a local
 Cognee instance with deterministic model substitutes, PostgreSQL advisory
 locks, and clean wheel installation.
 

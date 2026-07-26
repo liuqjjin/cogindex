@@ -218,6 +218,39 @@ def test_delete_undeclared_document() -> None:
     assert fake.unconverged_documents("default", dataset) == []
 
 
+def test_user_managed_target_still_deletes_undeclared_document() -> None:
+    # managed_by controls whole-dataset teardown on unmount. It does not
+    # change the desired document set while the target remains mounted.
+    env, fake = _setup("delete_user_managed")
+    dataset = "docs_delete_user_managed"
+    app_name = "engine_lc_delete_user_managed"
+    _run_app(
+        env,
+        app_name,
+        dataset=dataset,
+        docs={"a.md": "alpha", "b.md": "beta"},
+        managed_by="user",
+    )
+    fake.calls.clear()
+
+    _run_app(
+        env,
+        app_name,
+        dataset=dataset,
+        docs={"a.md": "alpha"},
+        managed_by="user",
+    )
+
+    id_a = _data_id(dataset, "a.md")
+    id_b = _data_id(dataset, "b.md")
+    assert _ops(fake, "delete_documents") == [("delete_documents", dataset, (str(id_b),))]
+    assert _ops(fake, "teardown_dataset") == []
+    ds = fake.dataset("default", dataset)
+    assert ds is not None
+    assert sorted(ds.documents, key=str) == [id_a]
+    assert fake.unconverged_documents("default", dataset) == []
+
+
 def test_processing_config_change_purges_and_recognifies_all() -> None:
     env, fake = _setup("config_change")
     dataset = "docs_config"

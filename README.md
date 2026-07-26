@@ -4,278 +4,207 @@
 [![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-blue)](pyproject.toml)
 [![许可证](https://img.shields.io/badge/许可证-Apache--2.0-blue)](LICENSE)
 
-英文说明：[README.en.md](README.en.md)
+[英文说明](README.en.md)
 
-cogindex 用来把一组持续变化的文档同步到 Cognee 知识图谱。它作为
-CocoIndex 的自定义目标，负责稳定文档标识、增量更新、删除、失败重试和配置变更后的
-重新处理。
+cogindex 把 CocoIndex 检测到的文档变更同步到 Cognee 知识图谱。新增文件要写入，修改过的
+文件要替换，源文件删除后，原来抽取出的实体、关系和向量也要一起清掉。
 
-这个项目解决的是同步问题，不负责知识抽取模型本身。CocoIndex 提供目标状态和变更
-跟踪，Cognee 负责文档摄入、知识抽取和图谱存储，cogindex 负责让两边在文档发生增删改
-时保持一致。
+第一次导入并不难，直接调用 `cognee.add()` 和 `cognee.cognify()` 就可以。问题通常出在
+第二次同步：Cognee 默认按内容生成文档标识，内容一改就成了另一篇文档；重新 `add` 同一个
+`data_id` 又不会自动删除旧的图和向量数据；删除过程如果执行到一半，关系库里还可能保留一条
+看似已经处理完成的记录。cogindex 处理的就是这些情况，它不修改 Cognee 的抽取逻辑。
 
-> 当前版本为 `0.1.x`，仍在进行发布前加固。接口、测试和已知限制都保留在公开仓库中；
-> 在 `0.2.0` 完成前，不建议用于无法接受重建的数据集。
+项目当前版本是 `0.1.0`，尚未发布到 PyPI。接口仍可能调整，不应把它当作已经稳定的
+生产组件。
 
-## 为什么需要单独的同步层
+## 先跑起来
 
-直接调用 Cognee 可以完成首次导入：
-
-```python
-for text in documents:
-    await cognee.add(text, dataset_name="docs")
-await cognee.cognify(datasets=[dataset_id])
-```
-
-但这段代码没有保存“源文档 key 对应哪个 Cognee 文档”的关系。内容发生变化时，
-Cognee 默认会根据新内容生成新的标识；源文件被删除时，也没有足够的信息找到需要删除
-的记录。
-
-cogindex 使用源系统中的稳定 key，例如仓库内相对路径、数据库主键或对象存储 key，
-生成固定的 UUID5：
-
-```text
-data_id = uuid5(固定命名空间, runtime_key + tenant + dataset + document_key)
-```
-
-内容不参与标识计算。因此：
-
-- 同一个 key 的内容变化会更新原文档，而不是新增一个版本；
-- key 不再声明时，可以定位并删除对应文档；
-- 一次写入中途失败后，下一次运行仍能根据跟踪记录继续处理；
-- 处理配置变化时，可以让已有文档重新抽取。
-
-标识规则和兼容约束见
-[ADR-0002](docs/adr/0002-stable-document-identity.md)。
-
-## 快速开始
-
-克隆仓库并安装依赖：
+需要 Python 3.11、3.12 或 3.13，以及 [uv](https://docs.astral.sh/uv/)：
 
 ```bash
 git clone https://github.com/liuqjjin/cogindex.git
 cd cogindex
 uv sync --all-extras
-```
 
-准备一个包含 Markdown 或文本文件的目录，然后运行不需要 API key 的确定性示例：
-
-```bash
+mkdir -p my-docs
+printf '# CocoIndex\nCocoIndex tracks source changes.\n' > my-docs/cocoindex.md
+printf '# Cognee\nCognee builds a knowledge graph.\n' > my-docs/cognee.md
 uv run python examples/quickstart_live.py ./my-docs --deterministic
 ```
 
-修改、新增或删除文件后再次运行，示例会重新同步并打印校验结果。持续监听目录：
+这个例子使用测试中的确定性模型替身，不需要 API key，适合检查同步过程。修改或删除
+`my-docs` 里的文件后再运行一次，可以看到同一份数据被更新或删除。加入 `--live` 可以持续
+监听目录。确定性模式的输出不能用来评价真实模型的抽取效果。
 
-```bash
-uv run python examples/quickstart_live.py ./my-docs --deterministic --live
-```
-
-确定性模式只用于验证同步过程，不代表真实模型的抽取质量。
-
-## 在 CocoIndex 流程中使用
+接入已有的 CocoIndex 流程时，先注册 Cognee 运行时，再为数据集声明 target。下面是一个
+最小例子；真实模型所需的环境变量见 [.env.example](.env.example)。
 
 ```python
+import asyncio
+from pathlib import Path
+
 import cocoindex as coco
 import cogindex
 
 COGNEE = coco.ContextKey[cogindex.CogneeRuntime]("cognee")
 
+runtime = cogindex.LocalCogneeRuntime(
+    data_root=Path("./data/cognee"),
+    system_root=Path("./data/cognee-system"),
+)
+environment = coco.Environment(
+    coco.Settings.from_env(db_path="./data/cocoindex-tracking"),
+)
+environment.context_provider.provide(COGNEE, runtime)
+
 
 @coco.fn
-async def app_main(documents: dict[str, str]) -> None:
+async def app_main() -> None:
     target = await coco.use_mount(
         cogindex.declare_dataset_target,
         COGNEE,
         "docs",
     )
-    for document_key, content in documents.items():
-        target.declare_document(document_key, content)
-```
+    target.declare_document(
+        "guide.md",
+        "CocoIndex tracks changes. Cognee builds the graph.",
+        label="guide.md",
+    )
 
-`ContextKey` 的字符串会参与文档标识并写入 CocoIndex 跟踪库，只能使用 `cognee`
-这类逻辑名称，不能放 DSN、URL、API key 或其他凭据。公开入口不接受普通字符串代替
-`ContextKey`；名称只能包含 1–128 个 ASCII 字母、数字、点、下划线或连字符，且必须
-以字母或数字开头。
 
-运行应用前，需要把本地运行时放入同一个 `ContextProvider`：
-
-```python
-from pathlib import Path
-
-runtime = cogindex.LocalCogneeRuntime(
-    data_root=Path("./data/cognee"),
-    system_root=Path("./data/cognee-system"),
+app = coco.App(
+    coco.AppConfig(name="cogindex_readme_example", environment=environment),
+    app_main,
 )
 
-environment = coco.Environment(
-    coco.Settings.from_env(db_path="./data/cocoindex-tracking"),
-)
-environment.context_provider.provide(COGNEE, runtime)
+
+async def run() -> None:
+    await app.update().result()
+    report = await cogindex.verify_dataset(
+        runtime,
+        COGNEE,
+        "docs",
+        [cogindex.ExpectedDocument("guide.md", label="guide.md")],
+    )
+    print(report.render())
+
+
+asyncio.run(run())
 ```
 
-完整可运行代码见 [examples/quickstart_live.py](examples/quickstart_live.py)。
+`"guide.md"` 是文档在源系统里的稳定 key，也可以换成仓库相对路径、数据库主键或对象存储
+key。正文更新时 key 不变，因此 `data_id` 也不变。
 
-## 一次同步做什么
+`ContextKey` 必须使用固定的逻辑名称，不要放 URL、DSN 或密钥。这个名称会写入跟踪状态，
+也会参与 `data_id` 的生成。
 
-`reconcile()` 只比较目标状态和跟踪记录，不执行外部 I/O。真正的写入在 sink 中按数据集
-批量执行，并使用同一把数据集锁：
+文件夹同步、递归路径和同步后的检查都可以参考
+[examples/quickstart_live.py](examples/quickstart_live.py)。
 
-```text
-删除不再需要的文档
-    ↓
-清理被替换文档的图和向量数据
-    ↓
-批量写入新增或更新的文档
-    ↓
-对本批次执行一次 cognify
-    ↓
-提交 CocoIndex 跟踪记录
-```
+## 文档变更时会发生什么
 
-其中几条规则不能省略：
+每篇文档都有固定的 UUID5。CocoIndex 记录上次已经确认的状态，cogindex 根据本次声明和旧
+记录选择操作：
 
-- 文档标识只由逻辑位置决定，不能由内容决定；
-- 替换内容前先清理旧派生数据；
-- `add()` 必须关闭上游默认的逐项跳过和数据缓存，否则替换内容可能没有真正写入；
-- 删除不存在的文档按成功处理，但权限错误和其他写入错误必须向上抛出；
-- 只有实际尝试并成功完成的写入才能提交跟踪记录。
+| 变化 | 写入方式 |
+| --- | --- |
+| 新文档 | 写入原文并执行 `cognify` |
+| 正文、外部元数据、`node_set` 或处理配置变化 | 先用 `forget(memory_only=True)` 清除旧派生数据，再以原 `data_id` 写入并重新处理 |
+| `importance_weight` 变化 | 删除原始记录后按原 `data_id` 重建；Cognee 不能原地更新这个字段 |
+| 只有标签变化且旧状态明确 | 重新写入标签，不重复抽取 |
+| 源文档删除 | 删除原文及其不再被其他文档引用的派生数据 |
 
-详细设计见：
+同一数据集的一批写入共用一把锁，需要执行的步骤按删除、清理旧派生数据、批量 `add` 排列；
+需要重新抽取时，整批最多调用一次 `cognify`。多进程写同一数据集时可以使用
+`PostgresAdvisoryLockProvider`；它需要安装 `postgres` extra，并要求所有写入进程连接同一个
+PostgreSQL。默认的 `InProcessLockProvider` 只负责单进程内的并发。
 
-- [ADR-0003：一致性模型](docs/adr/0003-consistency-model.md)
-- [ADR-0004：替换与删除顺序](docs/adr/0004-replace-delete-protocol.md)
-- [ADR-0005：配置变更后的重新处理](docs/adr/0005-configuration-invalidation.md)
-- [ADR-0006：数据集锁](docs/adr/0006-concurrency-and-locking.md)
+CocoIndex 和 Cognee 不能共用一个事务。外部写入中途失败时，CocoIndex 会保留未确认的新旧
+状态；下一次同步据此重新执行替换或删除。只要源文档和处理配置不再变化、跟踪库还在，并且
+之后有一次同步能够完整执行，数据就能恢复一致。
 
-## 正确性边界
+具体取舍记录在：
 
-cogindex 不提供跨系统事务。CocoIndex 跟踪库、Cognee 关系库、图数据库和向量数据库不能
-放进同一个事务，因此进程异常退出后，外部状态可能暂时只完成了一部分。
+- [稳定文档标识](docs/adr/0002-stable-document-identity.md)
+- [失败后的重试规则](docs/adr/0003-consistency-model.md)
+- [替换和删除顺序](docs/adr/0004-replace-delete-protocol.md)
+- [处理配置变化](docs/adr/0005-configuration-invalidation.md)
+- [数据集锁](docs/adr/0006-concurrency-and-locking.md)
 
-项目采用的恢复方式是：
+## 检查实际数据
 
-1. 外部操作保持幂等；
-2. CocoIndex 在写入前保存待提交记录；
-3. 失败后把所有可能的旧记录交给 handler；
-4. handler 只在这些可能状态都与目标一致时停止处理。
+`verify_dataset()` 能发现缺少的文档、多出来的文档、未完成的 `cognify` 和标签不一致。它
+不会读取图和向量，也不会自动修复问题。`cogindex.doctor()` 用来检查本地配置和模型凭据。
 
-当前自动恢复范围针对由同步流程自身产生的未确认状态。若用户绕过 cogindex 直接修改
-Cognee，`verify_dataset()` 可以发现部分漂移，但普通重跑不一定能够修复。外部漂移需要
-显式重建或后续提供的修复接口。
+## 安装和限制
 
-## 校验和环境检查
-
-```python
-report = await cogindex.verify_dataset(
-    runtime,
-    COGNEE,
-    "docs",
-    expected_documents,
-)
-print(report.render())
-
-print(cogindex.doctor().render())
-```
-
-`verify_dataset()` 当前检查：
-
-- 缺失文档；
-- 未声明的额外文档；
-- cognify 未完成；
-- 标签不一致。
-
-它不能证明图和向量一定来自当前内容，也不直接修改数据。
-
-## 测试
-
-```bash
-make test              # 单元测试
-make test-property     # Hypothesis 状态机
-make test-integration  # 真实本地 Cognee，使用确定性模型替身
-make test-postgres     # PostgreSQL 咨询锁
-make test-llm          # 可选，调用真实模型供应商
-make ci                # 静态检查、类型检查、审计门禁、单元和属性测试
-```
-
-当前持续集成覆盖：
-
-- Linux、macOS；
-- Python 3.11、3.12、3.13；
-- Ruff 和格式检查；
-- strict mypy；
-- 286 个单元测试；
-- 60 组、每组 40 步的 Hypothesis 状态机；
-- 真实 SQLite、LanceDB 和内嵌图数据库集成测试；
-- PostgreSQL 咨询锁测试；
-- wheel 构建和干净环境导入。
-
-最近一次覆盖率任务在启用分支统计后为 91%（语句 93%，分支 85%）。覆盖率只说明
-哪些代码路径被执行过，不能替代真实上游行为测试。
-
-## 基准测试
-
-仓库保留了 benchmark harness，但旧版对比场景正在重做。原因是旧场景的编辑集合定义
-有误，而且清理测试数据前没有先绑定隔离存储目录。
-
-在新的隔离测试、原始 JSON 报告和可达提交号全部准备好之前，本 README 不引用旧的
-耗时和文档数量结果，也不建议运行 real baseline。测量方法和修订状态见
-[docs/benchmarks.md](docs/benchmarks.md)。
-
-## 安装与兼容性
-
-项目尚未发布到 PyPI。可以从 Git 安装：
+PyPI 上还没有这个包，可以直接从 Git 安装：
 
 ```bash
 python3 -m pip install "git+https://github.com/liuqjjin/cogindex.git"
 ```
 
-或者在 uv 项目中添加：
+uv 项目可以使用：
 
 ```bash
 uv add "cogindex @ git+https://github.com/liuqjjin/cogindex.git"
 ```
 
-支持范围：
+当前支持 Python `>=3.11,<3.14`、CocoIndex `>=1.0.18,<2` 和 Cognee
+`>=1.4.0,<1.5`。
 
-- Python `>=3.11,<3.14`
-- CocoIndex `>=1.0.18,<2`
-- Cognee `>=1.4.0,<1.5`
+使用 `LocalCogneeRuntime` 时，`data_root` 和 `system_root` 都必须显式传入。同一进程里
+同时存在的本地运行时必须使用相同目录。这个运行时只接受 `tenant="default"`；如果传入
+Cognee `user`，按名称查找 dataset 时只会使用该用户自己拥有的数据集。
 
-本地运行时还有三条约束：
+还有几项限制需要提前知道：
 
-- `data_root` 和 `system_root` 必须同时显式传入；
-- 同一进程中同时存在的 `LocalCogneeRuntime` 必须使用相同的存储目录；
-- `LocalCogneeRuntime` 只接受 `tenant="default"`，实际 Cognee 租户由传入的
-  `user` 决定；按名称查找时只会绑定该用户自己拥有的数据集，不会误用同名共享数据集。
+- Cognee 的 REST `add` 不能传 `data_id`，因此目前只支持进程内运行时；
+- 卸载由系统管理的 target 会清空 dataset，但 Cognee 仍会留下空的 dataset 记录；
+- `managed_by="user"` 只禁止卸载 target 时清空整个数据集；target 仍在时，停止声明的文档
+  仍会按正常规则删除；
+- 如果 CocoIndex 跟踪库丢失，需要先对整个 dataset 执行一次
+  `forget(memory_only=True)`，再重新同步；
+- `verify_dataset()` 只能检查文档记录、标识、处理状态和标签，不能检查派生内容。
 
-Cognee 版本相关导入统一放在
-[`src/cogindex/_compat.py`](src/cogindex/_compat.py)；项目不修改上游运行时代码。
+## 测试
 
-## 项目结构
+日常开发使用这些命令：
 
-```text
-src/cogindex/          包实现和公开接口
-tests/unit/            协调逻辑、身份、锁和运行时单元测试
-tests/property/        随机失败序列和收敛检查
-tests/integration/     真实本地 Cognee、PostgreSQL 和可选真实模型测试
-examples/              可直接运行的文件夹同步与共享实体示例
-docs/adr/              设计决策及其修改记录
-docs/upstream-audit/   固定版本的上游源码审查记录
-benchmarks/            benchmark harness 和场景
+```bash
+make ci                # Ruff、mypy、审计门禁、单元测试、属性测试
+make test-integration  # 本地 Cognee，使用确定性模型替身
+make test-postgres     # PostgreSQL 咨询锁
+make test-llm          # 可选；调用真实模型，会产生费用
+make coverage
+make smoke             # 构建 wheel，并在干净环境中导入
 ```
 
-两个上游的固定提交记录在
-[`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json)。审查采用分级方式：与连接器直接相关的
-代码和测试做详细检查，邻近模块确认接口，其余文件只做分类记录。台账用于保存检查范围
-和判断依据，不代表逐行读完两个仓库。
+当前有 287 个单元测试、60×40 步的 Hypothesis 状态机、9 个本地 Cognee 集成测试和
+4 个 PostgreSQL 锁测试。CI 覆盖 Linux、macOS 和 Python 3.11–3.13，总覆盖率为 91%
+（语句 93%，分支 85%）。
 
-## 上游项目
+Cognee 集成测试使用 SQLite、LanceDB 和内嵌图数据库，模型调用使用固定输出的测试替身，
+不代表真实模型效果。
 
-- [CocoIndex](https://github.com/cocoindex-io/cocoindex)：提供目标状态、变更检测和跟踪记录。
-- [Cognee](https://github.com/topoteretes/cognee)：负责文档摄入、知识抽取、图谱和检索。
+性能基准正在重做；旧结果因场景定义和存储隔离问题已经撤下，进度见
+[docs/benchmarks.md](docs/benchmarks.md)。
 
-依赖关系与许可证说明见 [ATTRIBUTION.md](ATTRIBUTION.md)。
+## 设计与源码
 
-## 许可证
+公开接口在 [`src/cogindex/__init__.py`](src/cogindex/__init__.py)，实现模块位于
+`src/cogindex/`。`tests/unit/`、`tests/property/` 和 `tests/integration/` 分别对应单元、
+属性和集成测试。架构决定及其后续修订放在 [`docs/adr/`](docs/adr/)。
 
-Apache-2.0。cogindex 与 CocoIndex、Cognee 均无隶属关系。
+两个上游仓库的固定提交写在 [`UPSTREAM_LOCK.json`](UPSTREAM_LOCK.json)。源码审查记录位于
+[`docs/upstream-audit/`](docs/upstream-audit/)：直接相关的代码和测试做详细检查，邻近模块
+确认接口，其余文件只记录分类和判断理由。
+
+## 上游与许可证
+
+这个项目建立在 [CocoIndex](https://github.com/cocoindex-io/cocoindex) 和
+[Cognee](https://github.com/topoteretes/cognee) 之上，前者提供变更检测与跟踪记录，后者
+负责文档摄入、知识抽取和存储。感谢两个项目提供的实现和测试。
+
+依赖与许可证说明见 [ATTRIBUTION.md](ATTRIBUTION.md)。cogindex 使用 Apache-2.0 许可证，
+与 CocoIndex、Cognee 均无隶属关系。

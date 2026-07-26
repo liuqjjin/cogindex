@@ -156,8 +156,9 @@ work to "fix" them without an upstream change first.
 
 - No REST-backed runtime: Cognee's REST add takes no `data_id`.
 - Unmounting empties a dataset but leaves the empty dataset row.
-- `managed_by="user"` means cogindex destroys nothing there, not that it
-  removes only what it added.
+- `managed_by="user"` only suppresses whole-dataset teardown when the target
+  is unmounted. While mounted, a document that stops being declared is still
+  deleted; this is not per-document ownership.
 - `verify_dataset` compares presence, identity, completion and label. It cannot
   see whether derivatives match current content.
 - Losing the CocoIndex tracking store leaves documents looking new while Cognee
