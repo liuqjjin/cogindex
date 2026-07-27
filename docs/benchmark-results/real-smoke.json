@@ -1,6 +1,6 @@
 {
   "environment": {
-    "timestamp_utc": "2026-07-27T11:50:01+00:00",
+    "timestamp_utc": "2026-07-27T15:14:36+00:00",
     "mode": "real",
     "profile": "smoke",
     "platform": "macOS-26.5.2-arm64-arm-64bit",
@@ -10,7 +10,7 @@
     "cogindex": "0.1.0",
     "cocoindex": "1.0.18",
     "cognee": "1.4.0",
-    "git_commit": "415dd2d87f692fd85e2a6368ef6551527a9bea3f",
+    "git_commit": "3e8cf3d363cf719665fcc49e452972555a525aed",
     "git_dirty": false
   },
   "results": [
@@ -24,12 +24,12 @@
         "repetitions": 3
       },
       "metrics": {
-        "full_reindex_median_seconds": 7.037,
-        "full_reindex_min_seconds": 7.0018,
-        "full_reindex_max_seconds": 7.0483,
-        "incremental_median_seconds": 9.5857,
-        "incremental_min_seconds": 9.5813,
-        "incremental_max_seconds": 9.5896,
+        "full_reindex_median_seconds": 7.0587,
+        "full_reindex_min_seconds": 7.0121,
+        "full_reindex_max_seconds": 7.1549,
+        "incremental_median_seconds": 9.5655,
+        "incremental_min_seconds": 9.5555,
+        "incremental_max_seconds": 9.5774,
         "full_reindex_processed_documents": 5,
         "incremental_processed_documents": 2,
         "full_reindex_unnecessary_reprocessed": 3,
@@ -41,14 +41,14 @@
         "incremental_derivative_check": true,
         "consistent": true,
         "full_reindex_seconds_samples": [
-          7.0018,
-          7.037,
-          7.0483
+          7.0121,
+          7.0587,
+          7.1549
         ],
         "incremental_seconds_samples": [
-          9.5813,
-          9.5896,
-          9.5857
+          9.5774,
+          9.5655,
+          9.5555
         ],
         "full_reindex_stale_entities": 0,
         "incremental_stale_entities": 0,

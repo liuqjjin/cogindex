@@ -170,8 +170,8 @@ two, deletes one, and repeats each arm three times:
 | Stale version-marker entities | 0 | 0 |
 | Missing expected marker entities | 0 | 0 |
 
-On this small corpus, incremental sync was not faster: its median was 9.5857
-seconds versus 7.0370 seconds for a full rebuild. The benchmark checks work
+On this small corpus, incremental sync was not faster: its median was 9.5655
+seconds versus 7.0587 seconds for a full rebuild. The benchmark checks work
 scope, document state, and specific graph markers. It does not represent
 real-model throughput or scan the vector store for every possible orphan. See
 [docs/benchmarks.md](docs/benchmarks.md) for the environment, raw samples, and
