@@ -1,0 +1,61 @@
+{
+  "environment": {
+    "timestamp_utc": "2026-07-27T11:50:01+00:00",
+    "mode": "real",
+    "profile": "smoke",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 15,
+    "python": "3.12.13",
+    "cogindex": "0.1.0",
+    "cocoindex": "1.0.18",
+    "cognee": "1.4.0",
+    "git_commit": "415dd2d87f692fd85e2a6368ef6551527a9bea3f",
+    "git_dirty": false
+  },
+  "results": [
+    {
+      "category": "baseline_comparison",
+      "params": {
+        "mode": "real",
+        "n_docs": 6,
+        "k_changes": 2,
+        "k_deleted": 1,
+        "repetitions": 3
+      },
+      "metrics": {
+        "full_reindex_median_seconds": 7.037,
+        "full_reindex_min_seconds": 7.0018,
+        "full_reindex_max_seconds": 7.0483,
+        "incremental_median_seconds": 9.5857,
+        "incremental_min_seconds": 9.5813,
+        "incremental_max_seconds": 9.5896,
+        "full_reindex_processed_documents": 5,
+        "incremental_processed_documents": 2,
+        "full_reindex_unnecessary_reprocessed": 3,
+        "incremental_unnecessary_reprocessed": 0,
+        "final_documents": 5,
+        "full_reindex_record_check": true,
+        "incremental_record_check": true,
+        "full_reindex_derivative_check": true,
+        "incremental_derivative_check": true,
+        "consistent": true,
+        "full_reindex_seconds_samples": [
+          7.0018,
+          7.037,
+          7.0483
+        ],
+        "incremental_seconds_samples": [
+          9.5813,
+          9.5896,
+          9.5857
+        ],
+        "full_reindex_stale_entities": 0,
+        "incremental_stale_entities": 0,
+        "full_reindex_missing_entities": 0,
+        "incremental_missing_entities": 0
+      },
+      "notes": "Both arms start from the same corpus. The baseline hard-deletes its temporary dataset and rebuilds every current document; cogindex applies the fixed, disjoint edit/delete set. Arm order alternates between repetitions."
+    }
+  ]
+}
