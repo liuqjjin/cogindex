@@ -66,6 +66,8 @@ jobs:
           python-version: "3.12"
       - run: uv sync --all-extras
       - run: uv run pytest tests/integration -q -m integration
+      - name: Validate benchmark harness
+        run: uv run python -m benchmarks.run --profile smoke --mode fake
 
   postgres-locks:
     runs-on: ubuntu-latest

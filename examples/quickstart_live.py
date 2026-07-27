@@ -123,8 +123,10 @@ async def main() -> None:
 
     health = cogindex.doctor(check_credentials=not args.deterministic)
     print(health.render())
-    if not health.ok and not args.deterministic:
-        print("\nenvironment is not ready; fix the findings above or use --deterministic")
+    if not health.ok:
+        print("\nenvironment is not ready; fix the findings above")
+        if not args.deterministic:
+            print("if only model credentials are missing, use --deterministic")
         return
 
     env = coco.Environment(coco.Settings.from_env(db_path=args.storage / "cocoindex-tracking"))

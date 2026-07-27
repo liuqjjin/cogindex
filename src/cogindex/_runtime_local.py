@@ -8,12 +8,14 @@ idempotency contract documented on :class:`cogindex.CogneeRuntime`.
 from __future__ import annotations
 
 import logging
+import tempfile
 import threading
 import uuid
 import weakref
 from collections.abc import Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from . import _compat
@@ -28,6 +30,7 @@ logger = logging.getLogger("cogindex.runtime")
 
 _LOCK_SCOPE_PREFIX = "cogindex"
 _SUPPORTED_TENANT = "default"
+_UPLOAD_MEMORY_LIMIT = 8 * 1024 * 1024
 
 
 class LocalCogneeRuntime:
@@ -69,12 +72,10 @@ class LocalCogneeRuntime:
         normalized_roots = _normalize_storage_roots(data_root, system_root)
         _compat.load()
         self._data_root, self._system_root = normalized_roots
-        self._lock_provider: LockProvider = (
-            lock_provider if lock_provider is not None else InProcessLockProvider()
-        )
         self._user = user
         self._setup_done = False
         self._default_user_id: uuid.UUID | None = None
+        global _DEFAULT_LOCAL_LOCK_PROVIDER
         with _LOCAL_RUNTIME_CONFIG_LOCK:
             live_runtimes = list(_LIVE_LOCAL_RUNTIMES)
             conflict = next(
@@ -96,10 +97,18 @@ class LocalCogneeRuntime:
             # must detect before its next Cognee operation.
             if not live_runtimes:
                 _compat.configure_storage(*normalized_roots)
+                # asyncio locks are event-loop-bound once contended. Start a
+                # fresh provider with each process-global storage generation,
+                # then share it among every default runtime in that generation.
+                _DEFAULT_LOCAL_LOCK_PROVIDER = InProcessLockProvider()
+            self._lock_provider: LockProvider = (
+                lock_provider if lock_provider is not None else _DEFAULT_LOCAL_LOCK_PROVIDER
+            )
             _LIVE_LOCAL_RUNTIMES.add(self)
 
     async def _ensure_ready(self) -> None:
         """Lazily create cognee's database structures (idempotent)."""
+        _compat.ensure_local_sdk_mode()
         self._assert_storage_roots()
         if not self._setup_done:
             await _compat.ensure_databases_ready()
@@ -144,43 +153,49 @@ class LocalCogneeRuntime:
         for (node_set, importance_weight), group in sorted(
             groups.items(), key=lambda item: repr(item[0])
         ):
-            items = [
-                compat_info.data_item_cls(
-                    data=payload.content,
-                    label=payload.label,
-                    external_metadata=(
-                        dict(payload.external_metadata)
-                        if payload.external_metadata is not None
-                        else None
-                    ),
-                    data_id=payload.data_id,
-                )
-                for payload in group
-            ]
-            kwargs: dict[str, Any] = {
-                # Never let the ADD pipeline's per-item skip gate swallow our
-                # payloads: with either incremental_loading=True or
-                # data_cache=True (both upstream defaults), a data_id whose
-                # add_pipeline status is COMPLETED is skipped entirely,
-                # replacement content would silently never be ingested
-                # (memory-only purge resets only cognify_pipeline, by
-                # upstream design). Idempotency for unchanged content is
-                # preserved by ingestion's own content-hash comparison, and
-                # cognify keeps its own incremental gate. Verified by the
-                # integration replace tests (ADR-0004).
-                "incremental_loading": False,
-                "data_cache": False,
-            }
-            if node_set is not None:
-                kwargs["node_set"] = list(node_set)
-            if importance_weight is not None:
-                kwargs["importance_weight"] = importance_weight
-            if handle.dataset_id is not None:
-                kwargs["dataset_id"] = handle.dataset_id
-            if self._user is not None:
-                kwargs["user"] = self._user
-            result = await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
-            _raise_on_errored_runs(result, op="add", dataset=handle.name)
+            # Cognee interprets a bare string as a file path or URL whenever it
+            # happens to look like one. cogindex's payload is always document
+            # content, so pass an explicit upload object instead. A spooled
+            # binary stream also preserves bytes without decoding or rewriting
+            # them; the .txt name tells Cognee to use its text ingestion path.
+            with ExitStack() as upload_stack:
+                items = [
+                    compat_info.data_item_cls(
+                        data=_content_upload(payload.content, payload.data_id, upload_stack),
+                        label=payload.label,
+                        external_metadata=(
+                            dict(payload.external_metadata)
+                            if payload.external_metadata is not None
+                            else None
+                        ),
+                        data_id=payload.data_id,
+                    )
+                    for payload in group
+                ]
+                kwargs: dict[str, Any] = {
+                    # Never let the ADD pipeline's per-item skip gate swallow our
+                    # payloads: with either incremental_loading=True or
+                    # data_cache=True (both upstream defaults), a data_id whose
+                    # add_pipeline status is COMPLETED is skipped entirely,
+                    # replacement content would silently never be ingested
+                    # (memory-only purge resets only cognify_pipeline, by
+                    # upstream design). Idempotency for unchanged content is
+                    # preserved by ingestion's own content-hash comparison, and
+                    # cognify keeps its own incremental gate. Verified by the
+                    # integration replace tests (ADR-0004).
+                    "incremental_loading": False,
+                    "data_cache": False,
+                }
+                if node_set is not None:
+                    kwargs["node_set"] = list(node_set)
+                if importance_weight is not None:
+                    kwargs["importance_weight"] = importance_weight
+                if handle.dataset_id is not None:
+                    kwargs["dataset_id"] = handle.dataset_id
+                if self._user is not None:
+                    kwargs["user"] = self._user
+                result = await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
+                _raise_on_errored_runs(result, op="add", dataset=handle.name)
         if handle.dataset_id is None:
             # The dataset materialized on first add; learn its id.
             handle = await self.resolve_dataset(handle.name, handle.tenant)
@@ -355,6 +370,27 @@ class LocalCogneeRuntime:
 
 _LIVE_LOCAL_RUNTIMES: weakref.WeakSet[LocalCogneeRuntime] = weakref.WeakSet()
 _LOCAL_RUNTIME_CONFIG_LOCK = threading.Lock()
+_DEFAULT_LOCAL_LOCK_PROVIDER = InProcessLockProvider()
+
+
+def _content_upload(
+    content: str | bytes,
+    data_id: uuid.UUID,
+    stack: ExitStack,
+) -> SimpleNamespace:
+    """Wrap literal document content in Cognee's explicit upload shape."""
+    raw_content = content.encode("utf-8") if isinstance(content, str) else content
+    stream = stack.enter_context(
+        tempfile.SpooledTemporaryFile(  # noqa: SIM115 - owned by the ExitStack
+            # Small documents stay in memory; unusually large ones spill to a
+            # temporary file instead of doubling their full resident footprint.
+            max_size=_UPLOAD_MEMORY_LIMIT,
+            mode="w+b",
+        )
+    )
+    stream.write(raw_content)
+    stream.seek(0)
+    return SimpleNamespace(file=stream, filename=f"cogindex-{data_id}.txt")
 
 
 def _normalize_storage_roots(
@@ -416,6 +452,9 @@ def _raise_on_errored_runs(result: Any, *, op: str, dataset: str) -> None:
         if run_info is not None and type(run_info).__name__ == "PipelineRunErrored":
             errored_count += 1
 
+    # add() unwraps a one-dataset result, so a pipeline-wide failure can be the
+    # result itself rather than an entry in data_ingestion_info.
+    collect(result)
     entries = getattr(result, "data_ingestion_info", None)
     if isinstance(entries, list):
         for entry in entries:

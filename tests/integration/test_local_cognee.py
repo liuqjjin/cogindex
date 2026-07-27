@@ -15,8 +15,10 @@ async engines globally and they must not cross loops.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -167,9 +169,69 @@ async def existing_data_ids(data_ids: list[uuid.UUID]) -> set[uuid.UUID]:
         return set(rows.all())
 
 
+async def stored_content_hashes(data_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+    """Read Cognee's hash of the exact bytes supplied for each raw row."""
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from sqlalchemy import select
+
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        rows = await session.execute(
+            select(Data.id, Data.content_hash).where(Data.id.in_(data_ids))
+        )
+        return {data_id: str(content_hash) for data_id, content_hash in rows.all()}
+
+
 # ---------------------------------------------------------------------------
 # runtime-level contract: lifecycle, replace protocol, shared entities
 # ---------------------------------------------------------------------------
+
+
+async def test_literal_content_is_never_interpreted_as_a_path_or_url(
+    runtime: LocalCogneeRuntime,
+    llm_mock: AsyncMock,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = "int_literal_content"
+    path_text = "looks-like-content.txt"
+    url_text = "https://example.com/cogindex-must-not-fetch"
+    bytes_text = b"Bob works for BetaCorp.\n"
+    (tmp_path / path_text).write_text("WRONG FILE CONTENT", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    payloads = [
+        DocumentPayload(data_id=did(dataset, "path.md"), content=path_text, label="path"),
+        DocumentPayload(data_id=did(dataset, "url.md"), content=url_text, label="url"),
+        DocumentPayload(data_id=did(dataset, "bytes.md"), content=bytes_text, label="bytes"),
+    ]
+    with (
+        patch(
+            "cognee.tasks.ingestion.save_data_item_to_storage.validate_outbound_url",
+            new_callable=AsyncMock,
+        ) as validate_url,
+        patch(
+            "cognee.tasks.ingestion.save_data_item_to_storage.fetch_page_content",
+            new_callable=AsyncMock,
+        ) as fetch_page,
+    ):
+        handle = await runtime.add_documents(
+            DatasetHandle(name=dataset, tenant=TENANT),
+            payloads,
+        )
+
+    validate_url.assert_not_awaited()
+    fetch_page.assert_not_awaited()
+    expected_hashes = {
+        payloads[0].data_id: hashlib.md5(path_text.encode("utf-8")).hexdigest(),
+        payloads[1].data_id: hashlib.md5(url_text.encode("utf-8")).hexdigest(),
+        payloads[2].data_id: hashlib.md5(bytes_text).hexdigest(),
+    }
+    assert await stored_content_hashes(list(expected_hashes)) == expected_hashes
+    assert {
+        document.data_id: document.label for document in await runtime.list_documents(handle)
+    } == {payload.data_id: payload.label for payload in payloads}
 
 
 async def test_lifecycle_replace_and_shared_entity_provenance(

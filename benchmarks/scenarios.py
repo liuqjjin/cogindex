@@ -1,6 +1,6 @@
 """Benchmark scenarios for synchronization, deletion, recovery, and verification.
 
-0. baseline_comparison  disabled until its storage isolation is rebuilt
+0. baseline_comparison  hard rebuild of the current corpus versus incremental sync
 1. initial_ingest       first sync of N documents
 2. incremental_update   resync after changing K of N
 3. freshness            per-change sync latency distribution
@@ -21,9 +21,13 @@ All scenarios use one asyncio loop because Cognee caches async engines per loop.
 from __future__ import annotations
 
 import contextlib
+import itertools
+import shutil
 import tempfile
 import time
-from collections.abc import Iterator
+import uuid
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any
 
@@ -39,16 +43,48 @@ from .baseline import bench_baseline_comparison
 RUNTIME_KEY = coco.ContextKey[cogindex.CogneeRuntime]("cogindex_bench_runtime")
 PROCESSING = ProcessingConfig(graph_model_id="bench.Model")
 TENANT = "default"
+_BENCH_ROOT = Path(tempfile.mkdtemp(prefix="cogindex-bench-"))
+_CONTEXT_IDS = itertools.count()
 
 FAKE_PROFILES: dict[str, dict[str, int]] = {
-    "smoke": {"n_docs": 40, "k_changes": 6, "m_freshness": 6},
-    "default": {"n_docs": 500, "k_changes": 25, "m_freshness": 30},
-    "large": {"n_docs": 5000, "k_changes": 100, "m_freshness": 50},
+    "smoke": {
+        "n_docs": 40,
+        "k_changes": 6,
+        "m_freshness": 6,
+        "baseline_repetitions": 3,
+    },
+    "default": {
+        "n_docs": 500,
+        "k_changes": 25,
+        "m_freshness": 30,
+        "baseline_repetitions": 3,
+    },
+    "large": {
+        "n_docs": 5000,
+        "k_changes": 100,
+        "m_freshness": 50,
+        "baseline_repetitions": 3,
+    },
 }
 REAL_PROFILES: dict[str, dict[str, int]] = {
-    "smoke": {"n_docs": 6, "k_changes": 2, "m_freshness": 2},
-    "default": {"n_docs": 24, "k_changes": 6, "m_freshness": 5},
-    "large": {"n_docs": 80, "k_changes": 12, "m_freshness": 8},
+    "smoke": {
+        "n_docs": 6,
+        "k_changes": 2,
+        "m_freshness": 2,
+        "baseline_repetitions": 3,
+    },
+    "default": {
+        "n_docs": 24,
+        "k_changes": 6,
+        "m_freshness": 5,
+        "baseline_repetitions": 3,
+    },
+    "large": {
+        "n_docs": 80,
+        "k_changes": 12,
+        "m_freshness": 8,
+        "baseline_repetitions": 3,
+    },
 }
 
 
@@ -65,11 +101,72 @@ def _docs(n: int, *, version: int = 0, changed_first: int = 0) -> dict[str, str]
     """N deterministic documents; the first ``changed_first`` get ``version``."""
     return {
         f"doc-{i:05d}.md": (
-            f"Document {i} version {version if i < changed_first else 0} "
-            f"mentions Entity{i % 7} and SharedEntity."
+            f"Document {i} version {version if i < changed_first else 0} mentions "
+            f"{f'Replacement{i:05d}' if version and i < changed_first else f'Entity{i:05d}'} "
+            "and SharedEntity."
         )
         for i in range(n)
     }
+
+
+class _ObservedRuntime:
+    """Record the documents submitted to ``add`` without changing runtime behavior."""
+
+    def __init__(self, inner: cogindex.CogneeRuntime) -> None:
+        self.inner = inner
+        self.add_calls: list[tuple[str, tuple[uuid.UUID, ...]]] = []
+
+    async def resolve_dataset(self, name: str, tenant: str) -> cogindex.DatasetHandle:
+        return await self.inner.resolve_dataset(name, tenant)
+
+    async def add_documents(
+        self,
+        handle: cogindex.DatasetHandle,
+        payloads: Sequence[cogindex.DocumentPayload],
+    ) -> cogindex.DatasetHandle:
+        result = await self.inner.add_documents(handle, payloads)
+        self.add_calls.append((handle.name, tuple(payload.data_id for payload in payloads)))
+        return result
+
+    async def purge_document_memory(
+        self,
+        handle: cogindex.DatasetHandle,
+        data_ids: Sequence[uuid.UUID],
+    ) -> None:
+        await self.inner.purge_document_memory(handle, data_ids)
+
+    async def delete_documents(
+        self,
+        handle: cogindex.DatasetHandle,
+        data_ids: Sequence[uuid.UUID],
+    ) -> None:
+        await self.inner.delete_documents(handle, data_ids)
+
+    async def cognify_dataset(
+        self,
+        handle: cogindex.DatasetHandle,
+        profile: cogindex.CognifyProfile,
+    ) -> None:
+        await self.inner.cognify_dataset(handle, profile)
+
+    async def teardown_dataset(self, handle: cogindex.DatasetHandle) -> None:
+        await self.inner.teardown_dataset(handle)
+
+    async def list_documents(
+        self, handle: cogindex.DatasetHandle
+    ) -> Sequence[cogindex.StoredDocument]:
+        return await self.inner.list_documents(handle)
+
+    def dataset_lock(self, handle: cogindex.DatasetHandle) -> AbstractAsyncContextManager[None]:
+        return self.inner.dataset_lock(handle)
+
+    def added_ids(self, dataset: str, *, after: int = 0) -> list[uuid.UUID]:
+        return [
+            data_id
+            for name, data_ids in self.add_calls[after:]
+            if name == dataset
+            for data_id in data_ids
+        ]
 
 
 class BenchContext:
@@ -78,26 +175,21 @@ class BenchContext:
     def __init__(self, mode: str, label: str) -> None:
         self.mode = mode
         self.label = label
-        db_path = Path(tempfile.mkdtemp()) / f"bench-{label}"
+        self.instance_id = next(_CONTEXT_IDS)
+        db_path = _BENCH_ROOT / "tracking" / f"bench-{label}-{self.instance_id}"
         self.env = coco.Environment(coco.Settings.from_env(db_path=db_path))
         self.runtime: cogindex.CogneeRuntime
         if mode == "fake":
             self.runtime = FakeCogneeRuntime()
         else:
-            storage = Path(tempfile.mkdtemp())
+            storage = _BENCH_ROOT / "cognee"
             self.runtime = cogindex.LocalCogneeRuntime(
                 data_root=storage / "data", system_root=storage / "system"
             )
-        self.env.context_provider.provide(RUNTIME_KEY, self.runtime)
-        self.dataset = f"bench_{label}"
-        # Reuse one App so repeated updates share the same tracking history.
-        self._docs_holder: dict[str, dict[str, str]] = {"docs": {}}
-        self._app = coco.App(
-            coco.AppConfig(name=f"bench_{label}", environment=self.env),
-            _bench_main,
-            dataset=self.dataset,
-            docs_holder=self._docs_holder,
-        )
+        self.observed_runtime = _ObservedRuntime(self.runtime)
+        self.env.context_provider.provide(RUNTIME_KEY, self.observed_runtime)
+        self.dataset = f"bench_{label}_{self.instance_id}"
+        self._apps: dict[str, tuple[coco.App[Any, Any], dict[str, dict[str, str]]]] = {}
 
     async def prepare(self) -> None:
         if self.mode == "real":
@@ -108,10 +200,26 @@ class BenchContext:
             await cognee.prune.prune_system(metadata=True)
             await setup()
 
-    async def sync(self, docs: dict[str, str]) -> float:
-        self._docs_holder["docs"] = docs
+    async def sync(self, docs: dict[str, str], *, dataset: str | None = None) -> float:
+        dataset_name = dataset or self.dataset
+        app_entry = self._apps.get(dataset_name)
+        if app_entry is None:
+            docs_holder: dict[str, dict[str, str]] = {"docs": {}}
+            app = coco.App(
+                coco.AppConfig(
+                    name=f"bench_{self.label}_{self.instance_id}_{len(self._apps)}",
+                    environment=self.env,
+                ),
+                _bench_main,
+                dataset=dataset_name,
+                docs_holder=docs_holder,
+            )
+            app_entry = (app, docs_holder)
+            self._apps[dataset_name] = app_entry
+        app, docs_holder = app_entry
+        docs_holder["docs"] = docs
         started = time.perf_counter()
-        await self._app.update().result()
+        await app.update().result()
         return time.perf_counter() - started
 
     def llm_calls(self) -> int:
@@ -134,6 +242,11 @@ class BenchContext:
         if isinstance(self.runtime, FakeCogneeRuntime):
             return sum(len(call[2]) for call in self.runtime.calls if call[0] == "add_documents")
         return -1
+
+
+def cleanup_benchmark_storage() -> None:
+    """Remove this process's isolated benchmark files before ``os._exit``."""
+    shutil.rmtree(_BENCH_ROOT, ignore_errors=True)
 
 
 @contextlib.contextmanager
@@ -182,10 +295,19 @@ async def bench_initial_ingest(mode: str, sizes: dict[str, int]) -> BenchResult:
     n = sizes["n_docs"]
     ctx = BenchContext(mode, "initial")
     await ctx.prepare()
-    seconds = await ctx.sync(_docs(n))
+    docs = _docs(n)
+    seconds = await ctx.sync(docs)
+    report = await verify_dataset(
+        ctx.runtime,
+        RUNTIME_KEY,
+        ctx.dataset,
+        [ExpectedDocument(key) for key in docs],
+        tenant=TENANT,
+    )
     metrics: dict[str, Any] = {
         "seconds": round(seconds, 4),
         "docs_per_second": round(n / seconds, 1),
+        "issues": len(report.issues),
     }
     if mode == "fake":
         metrics["add_batches"] = ctx.op_calls("add_documents")
@@ -202,12 +324,25 @@ async def bench_incremental_update(mode: str, sizes: dict[str, int]) -> BenchRes
     full_seconds = await ctx.sync(_docs(n))
     llm_after_full = ctx.llm_calls()
     adds_before = ctx.added_ids()
+    observed_before = len(ctx.observed_runtime.add_calls)
 
     unchanged_seconds = await ctx.sync(_docs(n))
     llm_after_unchanged = ctx.llm_calls()
 
-    inc_seconds = await ctx.sync(_docs(n, version=1, changed_first=k))
+    changed_docs = _docs(n, version=1, changed_first=k)
+    inc_seconds = await ctx.sync(changed_docs)
     llm_after_incremental = ctx.llm_calls()
+    report = await verify_dataset(
+        ctx.runtime,
+        RUNTIME_KEY,
+        ctx.dataset,
+        [ExpectedDocument(key) for key in changed_docs],
+        tenant=TENANT,
+    )
+    docs_written = len(ctx.observed_runtime.added_ids(ctx.dataset, after=observed_before))
+    derivatives_consistent = True
+    if isinstance(ctx.runtime, FakeCogneeRuntime):
+        derivatives_consistent = not ctx.runtime.unconverged_documents(TENANT, ctx.dataset)
 
     metrics: dict[str, Any] = {
         "full_sync_seconds": round(full_seconds, 4),
@@ -215,15 +350,21 @@ async def bench_incremental_update(mode: str, sizes: dict[str, int]) -> BenchRes
         "incremental_seconds": round(inc_seconds, 4),
         "incremental_vs_full_ratio": round(inc_seconds / full_seconds, 3),
         "changed_docs": k,
+        "docs_written_incrementally": docs_written,
+        "wasted_writes": docs_written - k,
+        "record_issues": len(report.issues),
+        "derivatives_consistent": derivatives_consistent,
     }
     if mode == "fake":
         adds_incremental = ctx.added_ids() - adds_before
-        metrics["docs_written_incrementally"] = adds_incremental
-        metrics["wasted_writes"] = adds_incremental - k
+        if adds_incremental != docs_written:
+            metrics["CORRECTNESS_FAILURE"] = True
     else:
         metrics["llm_calls_full_sync"] = llm_after_full - llm_start
         metrics["llm_calls_unchanged_resync"] = llm_after_unchanged - llm_after_full
         metrics["llm_calls_incremental"] = llm_after_incremental - llm_after_unchanged
+    if docs_written != k or report.issues or not derivatives_consistent:
+        metrics["CORRECTNESS_FAILURE"] = True
     return BenchResult(
         "incremental_update",
         {"n_docs": n, "k_changes": k, "mode": mode},
@@ -265,14 +406,23 @@ async def bench_deletion(mode: str, sizes: dict[str, int]) -> BenchResult:
     kept = {key: content for index, (key, content) in enumerate(_docs(n).items()) if index >= k}
     seconds = await ctx.sync(kept)
     handle = await ctx.runtime.resolve_dataset(ctx.dataset, TENANT)
-    remaining = len(await ctx.runtime.list_documents(handle))
+    stored = await ctx.runtime.list_documents(handle)
+    remaining = len(stored)
+    report = await verify_dataset(
+        ctx.runtime,
+        RUNTIME_KEY,
+        ctx.dataset,
+        [ExpectedDocument(key) for key in kept],
+        tenant=TENANT,
+    )
     metrics: dict[str, Any] = {
         "seconds": round(seconds, 4),
         "deleted": k,
         "remaining": remaining,
         "remaining_expected": n - k,
+        "issues": len(report.issues),
     }
-    if remaining != n - k:
+    if remaining != n - k or report.issues:
         metrics["CORRECTNESS_FAILURE"] = True
     return BenchResult("deletion", {"n_docs": n, "k_deleted": k, "mode": mode}, metrics)
 

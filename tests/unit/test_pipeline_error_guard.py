@@ -63,6 +63,12 @@ def test_cognify_dict_result_with_errored_run_raises() -> None:
         _raise_on_errored_runs(result, op="cognify", dataset="ds")
 
 
+def test_top_level_errored_result_without_item_details_raises() -> None:
+    result = PipelineRunErrored(payload="pipeline failed before item results existed")
+    with pytest.raises(CogneePipelineError, match="add"):
+        _raise_on_errored_runs(result, op="add", dataset="ds")
+
+
 def test_clean_results_do_not_raise() -> None:
     _raise_on_errored_runs(
         _AddResult(data_ingestion_info=[{"run_info": PipelineRunCompleted(dataset_id="d")}]),

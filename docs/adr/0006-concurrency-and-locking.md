@@ -26,7 +26,7 @@ lock around every document sink batch (the forget→add→cognify sequence for
 one dataset) and every system-managed dataset teardown:
 
 - `InProcessLockProvider`: default; `asyncio.Lock` per lock key. Correct for
-  the single-process case and for tests.
+  one process and one event loop, and for tests.
 - `PostgresAdvisoryLockProvider` (extra: `cogindex[postgres]`): cross-process
   implementation using PostgreSQL session-level advisory locks. It polls
   `pg_try_advisory_lock(bigint)` through asyncpg. Key mapping:

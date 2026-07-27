@@ -45,6 +45,13 @@ different pair while either is alive fails. Before setup and every direct
 operation, the runtime also checks that outside code has not changed the
 effective roots.
 
+`cognee.serve()` installs a process-global remote client. Cognee's top-level
+`add`, `cognify`, and `forget` functions then route to REST even for an
+already-created local runtime. The remote `add` call drops the caller-supplied
+`data_id`, so `LocalCogneeRuntime` checks that state before every SDK operation
+and raises `CompatibilityError` while remote mode is active. Call
+`await cognee.disconnect()` before using the local runtime.
+
 The connector-level `tenant` coordinate is supported by the general protocol,
 but `LocalCogneeRuntime` accepts only `"default"`. Physical Cognee tenancy is
 selected by its `user` object. Letting two arbitrary connector tenant strings

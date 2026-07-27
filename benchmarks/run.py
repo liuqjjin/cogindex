@@ -10,6 +10,27 @@ import argparse
 import asyncio
 import os
 import sys
+from collections.abc import Sequence
+
+
+def _results_failed(results: Sequence[object]) -> bool:
+    """Return whether any benchmark reported a correctness or recovery failure."""
+    for result in results:
+        metrics = getattr(result, "metrics", {})
+        if metrics.get("CORRECTNESS_FAILURE") is True:
+            return True
+        if "consistent" in metrics and metrics["consistent"] is not True:
+            return True
+        if (
+            "converged_after_recovery" in metrics
+            and metrics["converged_after_recovery"] is not True
+        ):
+            return True
+        if "crashed_as_injected" in metrics and metrics["crashed_as_injected"] is not True:
+            return True
+        if isinstance(metrics.get("issues"), int) and metrics["issues"] > 0:
+            return True
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -52,21 +73,25 @@ def main(argv: list[str] | None = None) -> int:
             f"unknown categories: {sorted(unknown)}; valid: {sorted(scenarios.CATEGORIES)}"
         )
 
-    env = _harness.environment_fingerprint(args.mode, args.profile)
-    print(f"cogindex benchmarks: mode={args.mode} profile={args.profile}")
-    results = asyncio.run(scenarios.run_all(args.mode, args.profile, args.categories))
+    try:
+        env = _harness.environment_fingerprint(args.mode, args.profile)
+        print(f"cogindex benchmarks: mode={args.mode} profile={args.profile}")
+        results = asyncio.run(scenarios.run_all(args.mode, args.profile, args.categories))
 
-    stem = f"bench_{args.mode}_{args.profile}_" + env["timestamp_utc"].replace(":", "-").replace(
-        "+", "Z"
-    )
-    json_path, md_path = _harness.write_report(env, results, stem=stem)
+        timestamp = env["timestamp_utc"].replace("+00:00", "Z").replace(":", "-")
+        stem = f"bench_{args.mode}_{args.profile}_{timestamp}"
+        json_path, md_path = _harness.write_report(env, results, stem=stem)
 
-    for result in results:
-        headline = ", ".join(f"{name}={value}" for name, value in list(result.metrics.items())[:3])
-        print(f"  {result.category:20s} {headline}")
-    print(f"report: {json_path}")
-    print(f"report: {md_path}")
-    return 0
+        for result in results:
+            headline = ", ".join(
+                f"{name}={value}" for name, value in list(result.metrics.items())[:3]
+            )
+            print(f"  {result.category:20s} {headline}")
+        print(f"report: {json_path}")
+        print(f"report: {md_path}")
+        return 1 if _results_failed(results) else 0
+    finally:
+        scenarios.cleanup_benchmark_storage()
 
 
 if __name__ == "__main__":

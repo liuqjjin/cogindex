@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import uuid
 import weakref
@@ -15,7 +16,8 @@ import pytest
 
 import cogindex._compat as compat_module
 import cogindex._runtime_local as runtime_module
-from cogindex._runtime import DatasetHandle
+from cogindex import CompatibilityError
+from cogindex._runtime import DatasetHandle, DocumentPayload
 from cogindex._runtime_local import LocalCogneeRuntime
 from cogindex._spec import CognifyProfile
 
@@ -25,12 +27,14 @@ class _CompatHarness:
         self.roots: tuple[str | None, str | None] = (None, None)
         self.configure_calls: list[tuple[str, str]] = []
         self.ensure_ready = AsyncMock()
+        self.remote_mode = False
         self.default_user_id = AsyncMock(return_value=uuid.uuid4())
         self.list_datasets = AsyncMock(return_value=[])
         self.compat = SimpleNamespace(
+            remote_mode_check=lambda: self.remote_mode,
             cognee=SimpleNamespace(
                 datasets=SimpleNamespace(list_datasets=self.list_datasets),
-            )
+            ),
         )
 
     def load(self) -> Any:
@@ -148,6 +152,74 @@ def test_same_normalized_root_pair_allows_multiple_live_runtimes(
     assert first._storage_roots == normalized
     assert second._storage_roots == normalized
     assert compat_harness.configure_calls == [normalized]
+
+
+async def test_local_mode_runs_setup_without_false_positive(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    runtime = _runtime(tmp_path)
+
+    await runtime._ensure_ready()
+    await runtime._ensure_ready()
+
+    compat_harness.ensure_ready.assert_awaited_once()
+
+
+async def test_remote_mode_enabled_after_setup_rejects_ready_and_add(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    runtime = _runtime(tmp_path)
+    await runtime._ensure_ready()
+    compat_harness.remote_mode = True
+
+    with pytest.raises(CompatibilityError, match=r"await cognee\.disconnect"):
+        await runtime._ensure_ready()
+
+    payload = DocumentPayload(data_id=uuid.uuid4(), content="literal content")
+    with pytest.raises(CompatibilityError, match="REST add endpoint"):
+        await runtime.add_documents(
+            DatasetHandle(name="remote-rejected", tenant="default"),
+            [payload],
+        )
+
+    compat_harness.ensure_ready.assert_awaited_once()
+
+
+async def test_same_root_default_runtimes_share_dataset_lock(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    del compat_harness
+    data_root, system_root = _roots(tmp_path)
+    first = LocalCogneeRuntime(data_root=data_root, system_root=system_root)
+    second = LocalCogneeRuntime(data_root=data_root, system_root=system_root)
+    handle = DatasetHandle(name="shared-lock", tenant="default")
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def hold_first() -> None:
+        async with first.dataset_lock(handle):
+            first_entered.set()
+            await release_first.wait()
+
+    async def enter_second() -> None:
+        await first_entered.wait()
+        async with second.dataset_lock(handle):
+            second_entered.set()
+
+    first_task = asyncio.create_task(hold_first())
+    second_task = asyncio.create_task(enter_second())
+    await asyncio.wait_for(first_entered.wait(), timeout=5)
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not second_entered.is_set()
+
+    release_first.set()
+    await asyncio.wait_for(asyncio.gather(first_task, second_task), timeout=5)
+    assert second_entered.is_set()
 
 
 def test_different_root_pair_is_rejected_while_runtime_is_alive(

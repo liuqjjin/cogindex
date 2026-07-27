@@ -1,9 +1,9 @@
 # 示例
 
-两个示例都可在本地运行。`quickstart_live.py` 通过 `--deterministic` 使用确定性的
-LLM 和嵌入替身；`shared_entity_demo.py` 默认使用相同的替身。该模式不需要模型
-凭据，适合检查同步与物化过程，但输出不能代表真实模型的抽取质量。要使用已配置
-的模型，请先参考 [`.env.example`](../.env.example)；运行
+三个示例都可在本地运行。`quickstart_live.py` 通过 `--deterministic` 使用确定性的
+LLM 和嵌入替身；另外两个示例默认使用相同的替身。该模式不需要模型凭据，适合
+检查同步与物化过程，但输出不能代表真实模型的抽取质量。要使用已配置的模型，
+请先参考 [`.env.example`](../.env.example)；运行
 `quickstart_live.py` 时省略 `--deterministic`，运行
 `shared_entity_demo.py` 时添加 `--real`。
 
@@ -47,4 +47,28 @@ uv run python examples/shared_entity_demo.py
    graph entities: ['BetaCorp', 'Bob', 'Carol', 'SharedOrg']
 == step 3: carol.md removed; SharedOrg loses its last reference
    graph entities: ['BetaCorp', 'Bob']
+```
+
+## agent_memory_demo.py：Agent 读取更新后的图记忆
+
+```bash
+uv run python examples/agent_memory_demo.py
+```
+
+示例先把 `ProjectAtlas routes alerts to BlueQueue` 写入知识图谱，让一个只有图查询
+工具的最小 Agent 回答当前路由；随后编辑同一个 `routing.md`，把队列改为
+`GreenQueue`，再做一次增量同步并重复提问。
+
+这里没有引入 Agent 框架，也没有把固定回答冒充检索结果。Agent 的答案来自图中的
+`routes_alerts_to` 关系；脚本最后还会直接检查 `GreenQueue` 已经出现且
+`BlueQueue` 已经消失。确定性模式下的关键输出是：
+
+```
+1. Initial sync: ProjectAtlas routes alerts to BlueQueue.
+   Agent answer: ProjectAtlas routes alerts to BlueQueue.
+2. Edit routing.md: BlueQueue -> GreenQueue; run incremental sync.
+   Agent answer: ProjectAtlas routes alerts to GreenQueue.
+   Graph check: GreenQueue present=True
+   Graph check: BlueQueue absent=True
+3. Passed: the agent read the new fact; the old graph memory is gone.
 ```

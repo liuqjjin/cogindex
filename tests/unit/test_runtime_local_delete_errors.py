@@ -52,6 +52,7 @@ def _runtime_with_forget_error(
     compat_info = SimpleNamespace(
         cognee=_CogneeThatRaises(error),
         dataset_missing_errors=missing_errors,
+        remote_mode_check=lambda: False,
     )
     monkeypatch.setattr(_compat, "load", lambda: compat_info)
 

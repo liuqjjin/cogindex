@@ -43,6 +43,20 @@ def test_top_level_api_cogindex_calls_is_present() -> None:
         assert hasattr(cognee, name), f"cognee.{name} disappeared"
 
 
+def test_remote_mode_check_reads_current_upstream_state() -> None:
+    state = importlib.import_module("cognee.api.v1.serve.state")
+    previous_client = state.get_remote_client()
+    try:
+        state.set_remote_client(None)
+        _compat.ensure_local_sdk_mode()
+
+        state.set_remote_client(object())
+        with pytest.raises(CompatibilityError, match=r"await cognee\.disconnect"):
+            _compat.ensure_local_sdk_mode()
+    finally:
+        state.set_remote_client(previous_client)
+
+
 def test_data_item_accepts_a_caller_supplied_data_id() -> None:
     # The single capability the whole connector rests on: without it, identity
     # is content-derived and in-place replacement is impossible (ADR-0002).

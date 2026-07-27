@@ -17,7 +17,7 @@ import importlib.metadata
 import inspect
 import uuid
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from types import ModuleType
 from typing import Any
@@ -34,6 +34,7 @@ __all__ = [
     "dataset_database_context",
     "default_user_id",
     "ensure_databases_ready",
+    "ensure_local_sdk_mode",
     "load",
     "storage_roots",
 ]
@@ -69,6 +70,10 @@ class CogneeCompat:
     default_graph_model: type[Any] | None
     default_chunker: type[Any] | None
     default_chunk_size: int | None
+    # Cognee's public operations silently route through its REST client after
+    # cognee.serve(). This callable reads that process-global state on every
+    # invocation, so a runtime also notices serve() called after construction.
+    remote_mode_check: Callable[[], bool]
 
 
 @functools.cache
@@ -110,6 +115,21 @@ def load() -> CogneeCompat:
             "is impossible with this cognee version. " + _DATA_ID_PROPOSAL
         )
 
+    remote_mode_check: Callable[[], bool] | None = None
+    try:
+        serve_state_module = importlib.import_module("cognee.api.v1.serve.state")
+        candidate = serve_state_module.is_remote_mode
+    except (ImportError, AttributeError):
+        problems.append(
+            "cognee.api.v1.serve.state.is_remote_mode is unavailable, so "
+            "LocalCogneeRuntime cannot prevent accidental REST routing"
+        )
+    else:
+        if callable(candidate):
+            remote_mode_check = candidate
+        else:
+            problems.append("cognee.api.v1.serve.state.is_remote_mode is not callable")
+
     if hasattr(cognee, "forget"):
         forget_params: Mapping[str, inspect.Parameter]
         try:
@@ -126,6 +146,8 @@ def load() -> CogneeCompat:
         )
     if data_item_cls is None:  # pragma: no cover - unreachable, narrows type
         raise CompatibilityError("DataItem unavailable")
+    if remote_mode_check is None:  # pragma: no cover - unreachable, narrows type
+        raise CompatibilityError("Cognee remote-mode check unavailable")
 
     return CogneeCompat(
         cognee=cognee,
@@ -135,6 +157,7 @@ def load() -> CogneeCompat:
         default_graph_model=_signature_default_type(cognee.cognify, "graph_model"),
         default_chunker=_signature_default_type(cognee.cognify, "chunker"),
         default_chunk_size=_signature_default_int(cognee.cognify, "chunk_size"),
+        remote_mode_check=remote_mode_check,
     )
 
 
@@ -231,6 +254,21 @@ async def ensure_databases_ready() -> None:
     """
     low_level = importlib.import_module("cognee.low_level")
     await low_level.setup()
+
+
+def ensure_local_sdk_mode() -> None:
+    """Reject Cognee's process-global REST routing before local SDK work.
+
+    ``cognee.serve()`` changes the behavior of top-level ``add``, ``cognify``
+    and ``forget`` calls in-place. Its REST add endpoint cannot carry the
+    caller-supplied ``data_id`` that cogindex's identity contract requires.
+    """
+    if load().remote_mode_check():
+        raise CompatibilityError(
+            "LocalCogneeRuntime cannot run while Cognee remote mode is active: "
+            "the REST add endpoint cannot preserve cogindex's caller-supplied "
+            "data_id. Call `await cognee.disconnect()` before using this runtime."
+        )
 
 
 def storage_roots() -> tuple[str | None, str | None]:

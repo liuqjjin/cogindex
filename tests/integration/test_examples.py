@@ -125,3 +125,23 @@ def test_shared_entity_demo_matches_its_documented_output(tmp_path: Path) -> Non
         "['BetaCorp', 'Bob', 'Carol', 'SharedOrg']",
         "['BetaCorp', 'Bob']",
     ]
+
+
+def test_agent_memory_demo_reads_the_replaced_fact(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(EXAMPLES / "agent_memory_demo.py")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+    )
+    assert result.returncode == 0, f"demo failed:\n{result.stdout}\n{result.stderr}"
+
+    answer_lines = [line.strip() for line in result.stdout.splitlines() if "Agent answer:" in line]
+    assert answer_lines == [
+        "Agent answer: ProjectAtlas routes alerts to BlueQueue.",
+        "Agent answer: ProjectAtlas routes alerts to GreenQueue.",
+    ]
+    assert "Graph check: GreenQueue present=True" in result.stdout
+    assert "Graph check: BlueQueue absent=True" in result.stdout
+    assert "Passed: the agent read the new fact; the old graph memory is gone." in result.stdout

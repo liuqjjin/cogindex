@@ -9,9 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Disabled `baseline_comparison` until both comparison groups use isolated
-  storage and the edit/delete corpus is corrected. The previous headline
-  numbers are withdrawn.
+- Rebuilt `baseline_comparison` as a correctness-gated comparison between a
+  hard full rebuild and a fixed, disjoint edit/delete set. It records three
+  timing samples, observed write counts, stored-document checks and real graph
+  stale/missing-entity checks; the fake smoke profile now runs in CI.
+- Added a runnable Agent-memory example that reads a real relationship from
+  the local Cognee graph before and after a document replacement, then asserts
+  that the new fact is present and the old entity is gone.
+- Added a Chinese design overview covering the Agent/RAG boundary, data flow,
+  identity, replacement order, failure recovery, locking and known limits.
+- Pass literal `str` and `bytes` document content to Cognee as explicit upload
+  streams. A string that happens to look like a local path or URL can no longer
+  be interpreted as an external resource, and bytes are preserved unchanged.
+- Share the default in-process dataset locks across local runtimes that point
+  at the same process-global Cognee storage roots.
+- Reject `LocalCogneeRuntime` operations while `cognee.serve()` remote mode is
+  active, because Cognee's REST add path drops the caller-supplied `data_id`.
+- Detect a top-level `PipelineRunErrored` result even when Cognee returns no
+  per-item ingestion details.
 - Treat `external_metadata` as derivative-affecting. Changes now purge and
   cognify instead of taking the label-only update path.
 - Copy external metadata when a document is declared so later caller
