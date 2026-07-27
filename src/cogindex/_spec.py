@@ -87,23 +87,18 @@ class ProcessingConfig:
     chunk_size: int | None = None
     custom_prompt_fingerprint: str | None = None
     temporal_cognify: bool = False
-    llm_model: str | None = None
-    embedding_model: str | None = None
-    # Configurable independently of the model (cognee reads EMBEDDING_DIMENSIONS
-    # from the environment), and changing it invalidates every stored vector.
-    embedding_dimensions: int | None = None
+    # One digest covers Cognee's derivative-affecting runtime configuration.
+    # Raw prompts, ontology paths/content, model settings and credentials never
+    # enter ProcessingConfig or tracking records.
+    runtime_config_fingerprint: str | None = None
     extras: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        values: tuple[tuple[str, Any], ...] = (
-            ("chunk_size", self.chunk_size),
-            ("embedding_dimensions", self.embedding_dimensions),
-        )
-        for field_name, value in values:
-            if value is not None and (
-                isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            ):
-                raise ValueError(f"{field_name} must be a positive integer or None")
+        chunk_size: Any = self.chunk_size
+        if chunk_size is not None and (
+            isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0
+        ):
+            raise ValueError("chunk_size must be a positive integer or None")
         extras: Any = self.extras
         try:
             normalized_extras = tuple(tuple(item) for item in extras)
@@ -134,13 +129,16 @@ def processing_config_from_profile(
     Every ``None`` in the profile is resolved to the value cognify would
     actually use, read out of the installed version's signature, so that
     upgrading cognee's own defaults shows up as a fingerprint change instead
-    of passing unnoticed. The globally configured LLM and embedding settings
-    are folded in for the same reason: they live in cognee's env config rather
-    than in cognify() arguments, yet they shape every derivative.
+    of passing unnoticed. Cognee's globally configured LLM, embedding, prompt,
+    ontology and cognify settings are folded into one secret-free digest for
+    the same reason: they live outside cognify() arguments, yet shape its
+    derivatives.
 
-    Set ``include_runtime_models=False`` when one flow must produce identical
-    fingerprints across machines with different model configuration, accepting
-    that model changes then no longer invalidate anything.
+    Set ``include_runtime_models=False`` only as an explicit escape hatch when
+    one flow must produce identical fingerprints across machines. It disables
+    all automatic invalidation for Cognee runtime configuration, not just model
+    identifiers; the caller then owns supplying an explicit
+    :class:`ProcessingConfig` when any such input changes.
     """
     compat_info = _compat.load()
     graph_model = (
@@ -158,30 +156,25 @@ def processing_config_from_profile(
     chunk_size = (
         profile.chunk_size if profile.chunk_size is not None else (compat_info.default_chunk_size)
     )
-    llm_model: str | None = None
-    embedding_model: str | None = None
-    embedding_dimensions: int | None = None
+    runtime_config_fingerprint: str | None = None
     if include_runtime_models:
-        llm_model, embedding_model, embedding_dimensions = _compat.configured_models()
-        if not llm_model or not embedding_model or embedding_dimensions is None:
-            raise CompatibilityError(
-                "could not read Cognee's configured LLM, embedding model and dimensions; "
-                "processing invalidation would be incomplete"
-            )
+        runtime_inputs = _compat.configured_processing_inputs(
+            # Cognee selects the custom prompt with ``if custom_prompt``;
+            # an empty string therefore still uses the configured default.
+            uses_custom_graph_prompt=bool(profile.custom_prompt),
+            temporal_cognify=profile.temporal_cognify,
+        )
+        runtime_config_fingerprint = fingerprint_json(runtime_inputs)
     return ProcessingConfig(
         graph_model_id=_qualified_id(graph_model),
         graph_model_schema_fingerprint=_model_schema_fingerprint(graph_model),
         chunker_id=_qualified_id(chunker),
         chunk_size=chunk_size,
         custom_prompt_fingerprint=(
-            fingerprint_content(profile.custom_prompt)
-            if profile.custom_prompt is not None
-            else None
+            fingerprint_content(profile.custom_prompt) if profile.custom_prompt else None
         ),
         temporal_cognify=profile.temporal_cognify,
-        llm_model=llm_model,
-        embedding_model=embedding_model,
-        embedding_dimensions=embedding_dimensions,
+        runtime_config_fingerprint=runtime_config_fingerprint,
     )
 
 

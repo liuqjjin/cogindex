@@ -23,6 +23,7 @@ from tests.common import create_test_env
 # ContextKey names are globally unique per process: exactly one for this module.
 _RUNTIME_KEY_NAME = "cognee_runtime_engine_tests"
 _RUNTIME_KEY = coco.ContextKey[cogindex.CogneeRuntime](_RUNTIME_KEY_NAME)
+_IDENTITY_SCOPE = "fake-default"
 
 _PROFILE = cogindex.CognifyProfile()
 # Explicit ProcessingConfig so processing_config_from_profile (which imports
@@ -106,7 +107,13 @@ def _run_empty_app(env: coco.Environment, app_name: str) -> None:
 
 
 def _data_id(dataset: str, external_key: str) -> uuid.UUID:
-    return cogindex.document_data_id(_RUNTIME_KEY_NAME, "default", dataset, external_key)
+    return cogindex.document_data_id(
+        _RUNTIME_KEY_NAME,
+        _IDENTITY_SCOPE,
+        "default",
+        dataset,
+        external_key,
+    )
 
 
 def _ops(fake: FakeCogneeRuntime, op: str) -> list[_Call]:
@@ -335,7 +342,11 @@ def test_unmount_lock_failure_leaves_intent_uncommitted_and_retries() -> None:
     data_id = _data_id(dataset, "external.md")
     asyncio.run(
         fake.add_documents(
-            cogindex.DatasetHandle(name=dataset, tenant="default"),
+            cogindex.DatasetHandle(
+                name=dataset,
+                tenant="default",
+                identity_scope=_IDENTITY_SCOPE,
+            ),
             [cogindex.DocumentPayload(data_id=data_id, content="external row")],
         )
     )

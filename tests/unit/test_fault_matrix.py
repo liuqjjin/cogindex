@@ -46,6 +46,7 @@ from tests.common.engine_model import EmulatedEngine, TrackEntry
 RUNTIME_KEY = "rt-fault"
 TENANT = "default"
 DATASET = "ds-fault"
+IDENTITY_SCOPE = "fake-default"
 
 PROFILE_A = CognifyProfile(chunk_size=100)
 PROFILE_B = CognifyProfile(chunk_size=200)
@@ -55,7 +56,11 @@ def make_handler(fake: FakeCogneeRuntime, fp: str, profile: CognifyProfile) -> D
     return DocumentHandler(
         runtime=fake,
         runtime_key=RUNTIME_KEY,
-        handle=DatasetHandle(name=DATASET, tenant=TENANT),
+        handle=DatasetHandle(
+            name=DATASET,
+            tenant=TENANT,
+            identity_scope=IDENTITY_SCOPE,
+        ),
         profile=profile,
         processing_fingerprint=fp,
     )
@@ -71,7 +76,13 @@ def spec(content: str) -> CogneeDocumentSpec:
 
 
 def did(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY, TENANT, DATASET, key)
+    return cogindex.document_data_id(
+        RUNTIME_KEY,
+        IDENTITY_SCOPE,
+        TENANT,
+        DATASET,
+        key,
+    )
 
 
 def ops(fake: FakeCogneeRuntime, op: str) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -289,7 +300,11 @@ async def test_stale_identity_crash_mid_cleanup() -> None:
     # (old-identity-schema) data_id.
     old_id = uuid.uuid5(uuid.NAMESPACE_URL, "cogindex-old-schema-id")
     handle = await fake.add_documents(
-        DatasetHandle(name=DATASET, tenant=TENANT),
+        DatasetHandle(
+            name=DATASET,
+            tenant=TENANT,
+            identity_scope=IDENTITY_SCOPE,
+        ),
         [DocumentPayload(data_id=old_id, content="alpha")],
     )
     await fake.cognify_dataset(handle, PROFILE_A)

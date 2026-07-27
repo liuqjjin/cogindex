@@ -1,8 +1,8 @@
-"""CocoIndex target for synchronizing documents into Cognee knowledge graphs.
+"""Incremental document synchronization for Cognee knowledge bases.
 
-The package provides stable document ids, incremental replacement, deletion,
-configuration invalidation, and retry-safe target handlers. Design decisions
-are recorded in ``docs/adr/``.
+The package uses CocoIndex change tracking to provide stable document ids,
+incremental replacement, deletion, configuration invalidation, and retry-safe
+target handlers. Design decisions are recorded in ``docs/adr/``.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 from cocoindex.connectorkits.target import ManagedBy
 
 from ._doctor import DoctorFinding, DoctorReport, doctor
-from ._errors import CogindexError, CompatibilityError, LockTimeoutError
+from ._errors import CogindexError, CogneePipelineError, CompatibilityError, LockTimeoutError
 from ._identity import (
     COGINDEX_NAMESPACE,
     IDENTITY_SCHEMA_VERSION,
@@ -20,7 +20,7 @@ from ._locks import InProcessLockProvider, LockProvider
 from ._locks_postgres import PostgresAdvisoryLockProvider
 from ._records import DatasetConfigRecord, DocumentRecord
 from ._runtime import CogneeRuntime, DatasetHandle, DocumentPayload, StoredDocument
-from ._runtime_local import CogneePipelineError, LocalCogneeRuntime
+from ._runtime_local import LocalCogneeRuntime
 from ._spec import (
     CogneeDatasetSpec,
     CogneeDocumentSpec,

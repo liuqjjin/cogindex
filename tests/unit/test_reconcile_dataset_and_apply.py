@@ -221,6 +221,7 @@ def test_dataset_target_rejects_invalid_config_types_immediately(
 _RUNTIME_KEY = "rt"
 _TENANT = "default"
 _DATASET = "ds"
+_IDENTITY_SCOPE = "fake-default"
 _PROCESSING_FP = "processing-fp-1"
 
 
@@ -235,8 +236,13 @@ class _ControlledLockRuntime(FakeCogneeRuntime):
         self.teardown_lock_acquired = asyncio.Event()
         self.teardown_entered = asyncio.Event()
         self.timeline: list[str] = []
+        self.resolve_calls: list[tuple[str, str]] = []
         self._gate = asyncio.Lock()
         self._lock_attempts = 0
+
+    async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
+        self.resolve_calls.append((name, tenant))
+        return await super().resolve_dataset(name, tenant)
 
     async def add_documents(
         self,
@@ -286,14 +292,24 @@ def _doc_handler(fake: FakeCogneeRuntime) -> DocumentHandler:
     return DocumentHandler(
         runtime=fake,
         runtime_key=_RUNTIME_KEY,
-        handle=DatasetHandle(name=_DATASET, tenant=_TENANT),
+        handle=DatasetHandle(
+            name=_DATASET,
+            tenant=_TENANT,
+            identity_scope=_IDENTITY_SCOPE,
+        ),
         profile=CognifyProfile(),
         processing_fingerprint=_PROCESSING_FP,
     )
 
 
 def _data_id(external_key: str) -> uuid.UUID:
-    return document_data_id(_RUNTIME_KEY, _TENANT, _DATASET, external_key)
+    return document_data_id(
+        _RUNTIME_KEY,
+        _IDENTITY_SCOPE,
+        _TENANT,
+        _DATASET,
+        external_key,
+    )
 
 
 def _prev_doc_record(external_key: str, spec: CogneeDocumentSpec) -> DocumentRecord:
@@ -323,7 +339,11 @@ async def _run_mixed_batch(fake: FakeCogneeRuntime) -> dict[str, uuid.UUID]:
     batch's calls (seeding calls are cleared).
     """
     handler = _doc_handler(fake)
-    handle = DatasetHandle(name=_DATASET, tenant=_TENANT)
+    handle = DatasetHandle(
+        name=_DATASET,
+        tenant=_TENANT,
+        identity_scope=_IDENTITY_SCOPE,
+    )
     old_r1 = CogneeDocumentSpec(content="r1 old content")
     old_m1 = CogneeDocumentSpec(content="m1 content", label="old-label")
     old_d1 = CogneeDocumentSpec(content="d1 content")
@@ -420,7 +440,11 @@ async def test_importance_weight_change_hard_deletes_then_recreates() -> None:
     data_id = _data_id("weighted")
     old_spec = CogneeDocumentSpec(content="same content", importance_weight=0.25)
     handle = await fake.add_documents(
-        DatasetHandle(name=_DATASET, tenant=_TENANT),
+        DatasetHandle(
+            name=_DATASET,
+            tenant=_TENANT,
+            identity_scope=_IDENTITY_SCOPE,
+        ),
         [
             DocumentPayload(
                 data_id=data_id,
@@ -496,6 +520,7 @@ async def test_dataset_teardown_waits_for_document_batch_lock() -> None:
     assert entered_while_document_held_lock is False
     assert runtime.teardown_entered.is_set()
     assert runtime.timeline.index("lock_release:1") < runtime.timeline.index("teardown_enter")
+    assert runtime.resolve_calls == [(_DATASET, _TENANT)]
 
 
 async def test_dataset_teardown_lock_failure_propagates_before_runtime_call() -> None:

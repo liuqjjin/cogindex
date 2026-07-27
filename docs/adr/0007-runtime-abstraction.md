@@ -26,6 +26,13 @@ resolve a dataset, add documents with explicit data ids, forget item memory,
 forget an item, cognify a dataset, list stored document status, tear down
 managed content, and acquire a dataset-scoped lock.
 
+`resolve_dataset()` returns a `DatasetHandle` containing both the optional
+upstream dataset id and a required, non-secret `identity_scope`. The latter
+identifies the physical ownership coordinates that own document rows even
+when the dataset has not materialized. Identity derivation and locking consume
+that same value, so a runtime cannot accidentally isolate one while colliding
+the other.
+
 - **`LocalCogneeRuntime`** (supported): drives the Cognee Python SDK.
   All version-sensitive imports live in `cogindex/_compat.py`, which performs
   an explicit capability check at first use (cognee present, version in the
@@ -54,19 +61,44 @@ and raises `CompatibilityError` while remote mode is active. Call
 
 The connector-level `tenant` coordinate is supported by the general protocol,
 but `LocalCogneeRuntime` accepts only `"default"`. Physical Cognee tenancy is
-selected by its `user` object. Letting two arbitrary connector tenant strings
-point to the same physical dataset would give them different document ids and
-lock keys while teardown still empties the shared dataset.
+selected by its `user` object. The local handle's identity scope is a
+canonical encoding of the user's UUID and active `tenant_id`, with an explicit
+marker when no tenant is active. Letting two arbitrary connector tenant
+strings point to the same physical dataset would still give one physical
+resource multiple names.
 
-Dataset lookup is owner-scoped. A shared dataset with the same name is not
-selected implicitly, and duplicate owned matches fail instead of using list
-order. This keeps a name-only declaration from writing into a dataset merely
-shared with the acting user.
+Dataset lookup matches both `owner_id` and `tenant_id`. A shared dataset or a
+same-name dataset in another active tenant is not selected implicitly, and
+duplicate matches fail instead of using list order. This keeps a name-only
+declaration from writing into a dataset merely shared with the acting user or
+owned by that user in another tenant.
+
+Before every user-scoped SDK operation, the runtime refreshes the configured
+user, compares both ownership coordinates with the resolved handle, and passes
+that exact `User` object to Cognee. The runtime is pinned to the first resolved
+scope, so changing the default user or changing an explicit user's active
+tenant between operations fails before the SDK mutation. Cognee's active
+tenant is mutable global database state, however; callers must not switch it
+concurrently with a running sync. No connector-side check can close a change
+that occurs after validation but before Cognee re-reads the user internally.
 
 Hard dataset teardown deletes the dataset record. A handle containing its old
 UUID is invalid afterwards; callers that continue must resolve the dataset by
 name and use the fresh handle. The runtime does not treat an authorization
 error from a stale UUID as proof that the dataset is absent.
+
+Handles are obtained from `resolve_dataset()`, not assembled from a dataset
+name. This is especially important before teardown: resolution must happen
+before acquiring the lock so the lock uses the acting user's user-and-tenant
+scope.
+
+An existing runtime instance detects scope drift, but CocoIndex persists the
+`ContextKey` name rather than a live runtime binding. Across a restart,
+reusing the same key for a different user or active tenant is therefore not
+detectable. With old tracking state still present, synchronization or unmount
+can act on the current scope's same-name dataset. Keep a key bound to one
+scope; clean up the old scope under its old binding and choose a new
+`ContextKey` when switching.
 
 ### No remote runtime in 0.1
 

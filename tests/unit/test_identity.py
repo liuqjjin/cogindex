@@ -1,7 +1,8 @@
 """Identity and fingerprint invariants for ``cogindex._identity`` (ADR-0002).
 
 Golden values pinned here are identity-stability contracts: changing any of
-them renames every managed document. They must never change.
+them renames every managed document. They may change only with an intentional
+identity-schema migration.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import pytest
 
 from cogindex._identity import (
     COGINDEX_NAMESPACE,
+    IDENTITY_SCHEMA_VERSION,
     canonical_join,
     document_data_id,
     fingerprint_content,
@@ -56,8 +58,8 @@ class TestNormalizeExternalKey:
         assert normalize_external_key(_CAFE_NFC) == normalize_external_key(_CAFE_NFD)
 
     def test_nfc_and_nfd_yield_same_document_data_id(self) -> None:
-        nfc_id = document_data_id("rt", "tenant", "ds", _CAFE_NFC)
-        nfd_id = document_data_id("rt", "tenant", "ds", _CAFE_NFD)
+        nfc_id = document_data_id("rt", "user-a", "tenant", "ds", _CAFE_NFC)
+        nfd_id = document_data_id("rt", "user-a", "tenant", "ds", _CAFE_NFD)
         assert nfc_id == nfd_id
 
     def test_empty_key_raises(self) -> None:
@@ -85,40 +87,50 @@ class TestCogindexNamespace:
 
 
 class TestDocumentDataId:
+    def test_identity_schema_version_is_two(self) -> None:
+        assert IDENTITY_SCHEMA_VERSION == 2
+
     def test_golden_literals(self) -> None:
         # Identity-stability goldens: computed once and hardcoded; these
-        # values must NEVER change (a change renames every managed document).
-        assert document_data_id("rt-primary", "tenant-a", "docs", "guide/intro.md") == uuid.UUID(
-            "f52de54d-d400-5dea-b331-e6cee711c324"
-        )
-        assert document_data_id("rt-primary", "tenant-a", "docs", _CAFE_NFC + ".md") == uuid.UUID(
-            "eee82025-a8ac-54fa-a5dc-75175b5a8cf1"
-        )
+        # values change only with an intentional schema bump and migration.
+        assert document_data_id(
+            "rt-primary", "cognee-user-a", "tenant-a", "docs", "guide/intro.md"
+        ) == uuid.UUID("eba2aa86-0647-5792-8558-a59570def90b")
+        assert document_data_id(
+            "rt-primary", "cognee-user-a", "tenant-a", "docs", _CAFE_NFC + ".md"
+        ) == uuid.UUID("3f2263f6-006a-5047-bebe-e18be5784794")
 
     def test_each_coordinate_participates(self) -> None:
-        base = document_data_id("rt", "tenant", "ds", "key")
-        assert document_data_id("rt2", "tenant", "ds", "key") != base
-        assert document_data_id("rt", "tenant2", "ds", "key") != base
-        assert document_data_id("rt", "tenant", "ds2", "key") != base
-        assert document_data_id("rt", "tenant", "ds", "key2") != base
+        base = document_data_id("rt", "user", "tenant", "ds", "key")
+        assert document_data_id("rt2", "user", "tenant", "ds", "key") != base
+        assert document_data_id("rt", "user2", "tenant", "ds", "key") != base
+        assert document_data_id("rt", "user", "tenant2", "ds", "key") != base
+        assert document_data_id("rt", "user", "tenant", "ds2", "key") != base
+        assert document_data_id("rt", "user", "tenant", "ds", "key2") != base
 
     def test_deterministic(self) -> None:
-        assert document_data_id("rt", "tenant", "ds", "key") == document_data_id(
-            "rt", "tenant", "ds", "key"
+        assert document_data_id("rt", "user", "tenant", "ds", "key") == document_data_id(
+            "rt", "user", "tenant", "ds", "key"
         )
 
-    @pytest.mark.parametrize("position", [0, 1, 2])
+    @pytest.mark.parametrize("position", [0, 1, 2, 3])
     @pytest.mark.parametrize("bad_value", ["", "bad\x00value"])
     def test_rejects_invalid_identity_coordinates(self, position: int, bad_value: str) -> None:
-        coordinates = ["rt", "tenant", "ds"]
+        coordinates = ["rt", "user", "tenant", "ds"]
         coordinates[position] = bad_value
         with pytest.raises(ValueError):
-            document_data_id(coordinates[0], coordinates[1], coordinates[2], "key")
+            document_data_id(
+                coordinates[0],
+                coordinates[1],
+                coordinates[2],
+                coordinates[3],
+                "key",
+            )
 
     def test_rejects_url_or_dsn_shaped_runtime_key_without_echoing_it(self) -> None:
         secret = "postgresql://user:password@db/internal"
         with pytest.raises(ValueError) as exc_info:
-            document_data_id(secret, "tenant", "ds", "key")
+            document_data_id(secret, "user", "tenant", "ds", "key")
 
         assert "password" not in str(exc_info.value)
 

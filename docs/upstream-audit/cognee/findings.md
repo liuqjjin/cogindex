@@ -16,6 +16,12 @@ per-item incremental status, and the asyncio dataset lock).
   `uuid5(NAMESPACE_OID, f"{md5(content)}{user.id}{tenant_id}")`
   (`cognee/modules/data/methods/get_unique_data_id.py`), an edited document
   becomes a *new* row. Stable identity therefore requires supplying `data_id`.
+- `Data.id` is a global relational primary key; `owner_id` and `tenant_id` are
+  normal columns, not part of uniqueness
+  (`cognee/modules/data/models/Data.py`). Ingestion looks up an existing row by
+  `data_id` before applying the current owner and dataset. A caller-supplied id
+  that omits either the Cognee user or active tenant can therefore cross a
+  physical ownership boundary. cogindex identity schema 2 includes both.
 - **`DataItem` is not exported top-level**: absent from `cognee/__init__.py`
   and every `api` `__init__`. Only importable from
   `cognee.tasks.ingestion.data_item`. An upstream proposal is drafted in
@@ -44,6 +50,23 @@ per-item incremental status, and the asyncio dataset lock).
   `IntegrityError` retry that re-reads and takes the update path. File writes
   are content-addressed (idempotent).
 
+## Users, tenants, and dataset lookup
+
+- `User.tenant_id` is the mutable active-tenant selector. `get_default_user()`
+  and `get_user(id)` return the full `User`; resolving only an id and then
+  letting each API obtain another User can change scope between calls.
+- A dataset belongs to the pair `(owner_id, tenant_id)`. `create_dataset()`
+  checks name, owner, and active tenant, and permission-based listing filters
+  datasets to `user.tenant_id`. A same-name dataset owned by the same user in
+  another tenant is a different physical resource.
+- Cognee's top-level add, cognify, forget, and dataset methods accept a `User`.
+  cogindex refreshes and validates one User per operation and passes that exact
+  object rather than `None`.
+- `set_database_global_context_variables(dataset, user.id)` re-reads the User
+  internally before selecting tenant-specific storage. Active tenant therefore
+  must not be changed concurrently with an operation; the connector can catch
+  drift between operations but cannot make that upstream state immutable.
+
 ## Cognify and incrementality
 
 - `cognify(datasets=…)` (`cognee/api/v1/cognify/cognify.py`) runs per dataset,
@@ -58,6 +81,32 @@ per-item incremental status, and the asyncio dataset lock).
   `graph_model`, `chunker`, `custom_prompt`, LLM, or embedding model
   re-processes nothing by itself. Config invalidation must live in the caller
   (cogindex ADR-0005).
+- The effective inputs are spread across several global configs rather than
+  the `cognify()` signature alone: stage-specific extraction and summarization
+  models, framework and generation arguments, embedding dimensions and token
+  limits, classification/summarization response schemas, built-in prompt
+  files, temporal prompts, triplet mode and optional ontology content.
+  Endpoint, credential, batching, retry and logging fields are operational
+  settings. cogindex hashes the former set and excludes the latter.
+- Both LiteLLM client factories call
+  `get_model_max_completion_tokens(model)` and use
+  `min(registry_limit, llm_max_completion_tokens)` when the model is
+  registered. This applies independently after each stage override. Recording
+  only `LLM_MAX_COMPLETION_TOKENS` misses a registry change that alters
+  chunking and generation.
+- `EmbeddingConfig` resolves known vector widths from FastEmbed or LiteLLM,
+  but falls back to 3072 for an unknown model. Later,
+  `determine_embedding_dimensions()` replaces that value with the first
+  returned vector length unless `EMBEDDING_DIMENSIONS` is present in the
+  environment. A synchronous target cannot safely fingerprint that fallback:
+  unknown unexplicit models and unexplicit registry/config conflicts must be
+  rejected before the target is frozen.
+- Every `llm_args` entry is merged into the Instructor/native request. LiteLLM
+  1.93 also forwards unknown provider kwargs (through `extra_body` for
+  OpenAI-compatible providers), so unknown JSON fields cannot simply be
+  discarded. Its core completion parameters include
+  `parallel_tool_calls`; credentials and endpoints require an explicit,
+  separate exclusion policy.
 
 ## Deletion and provenance
 

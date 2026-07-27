@@ -105,10 +105,12 @@ async def verify_dataset(
     _validate_runtime_key(key_string)
     _validate_coordinate(tenant, "tenant")
     _validate_coordinate(name, "dataset_name")
+    handle = await runtime.resolve_dataset(name, tenant)
     expected_by_id: dict[uuid.UUID, ExpectedDocument] = {}
     for item in expected:
         data_id = document_data_id(
             key_string,
+            handle.identity_scope,
             tenant,
             name,
             normalize_external_key(item.external_key),
@@ -121,7 +123,6 @@ async def verify_dataset(
             )
         expected_by_id[data_id] = item
 
-    handle = await runtime.resolve_dataset(name, tenant)
     stored_by_id: dict[uuid.UUID, StoredDocument] = {}
     for stored_document in await runtime.list_documents(handle):
         if stored_document.data_id in stored_by_id:

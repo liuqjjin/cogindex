@@ -64,10 +64,12 @@ teardown takes that same lock before removing the whole dataset.
 2. Target keys and tracking records carry no credentials, URLs, connections or
    document content. External resources are named by `ContextKey` strings and
    resolved at sink time.
-3. Identity is `uuid5` over logical coordinates, never content (ADR-0002). The
-   namespace constant, `IDENTITY_SCHEMA_VERSION`, and the golden ids in
-   `tests/unit/test_identity.py` are frozen: changing any of them renames every
-   document anyone has ever indexed.
+3. Identity is `uuid5` over the runtime key, runtime-resolved physical identity
+   scope, logical tenant, dataset and external key—never content (ADR-0002).
+   The local physical scope is the canonical Cognee user id plus active
+   `tenant_id` (including explicit `None`). The namespace, identity schema and
+   golden ids are frozen between explicit migrations: changing them renames
+   every managed document.
 4. Sink actions are idempotent and safe under `prev_may_be_missing` and
    multiple `prev_possible_records`. Deleting or purging something absent is
    success.
@@ -80,9 +82,11 @@ teardown takes that same lock before removing the whole dataset.
    nothing recorded could have torn.
 6. Content, external metadata, node-set annotations and processing
    fingerprints are derivative-affecting and force a memory-only replace.
-   Importance-weight changes force hard recreation because Cognee does not
-   update that field on an existing raw row. The metadata fingerprint contains
-   only the label and takes the cheap re-add path.
+   Automatic processing fingerprints cover Cognee's effective stage models,
+   prompts, embedding and cognify/ontology inputs without credentials or
+   connection settings. Importance-weight changes force hard recreation
+   because Cognee does not update that field on an existing raw row. The
+   metadata fingerprint contains only the label and takes the cheap re-add path.
 7. Version-sensitive cognee imports go through `src/cogindex/_compat.py` and
    nowhere else. No monkey-patching.
 8. Never commit a tracking record for a write that was not attempted, and never
@@ -131,6 +135,13 @@ becomes an ADR.
   away.
 - The cognify gate compares one per-item status and has no notion of
   configuration. Config invalidation is entirely this connector's job.
+- Cognee's relational `Data.id` is global rather than owner-scoped. Every
+  runtime must return a stable, non-secret physical `identity_scope` from
+  `resolve_dataset()`; document ids and dataset locks both include it. The
+  local scope contains both the canonical user id and active tenant id.
+- Cognee's active tenant is mutable. Local runtime instances pin both user and
+  tenant and refresh the User before every SDK operation, but callers must not
+  switch a user's tenant concurrently with a sync.
 - A hard delete removes graph and vector derivatives first and the relational
   row last, so a crash in between leaves a document that looks complete and has
   nothing derived from it. Invariant 5 exists for this.
@@ -155,6 +166,11 @@ These are upstream-constrained and documented rather than hidden. Do not open
 work to "fix" them without an upstream change first.
 
 - No REST-backed runtime: Cognee's REST add takes no `data_id`.
+- A runtime `ContextKey` must not be rebound to another Cognee user or active
+  tenant while old tracking state exists. Instance-level scope checks do not
+  survive a restart; a later sync or unmount can otherwise act on the current
+  scope's same-name dataset. Clean the old scope under the old binding, then
+  use a new key.
 - Unmounting a system-managed target hard-deletes the Cognee dataset, including
   its raw rows, graph, vectors and dataset record.
 - Cognee logs but does not propagate individual raw-row deletion failures

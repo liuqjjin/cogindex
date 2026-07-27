@@ -1,7 +1,7 @@
 [project]
 name = "cogindex"
 version = "0.1.0"
-description = "Keep CocoIndex-managed documents and their Cognee knowledge graph in sync"
+description = "Incrementally synchronize changing documents into Cognee with stable identity and retry-safe updates"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

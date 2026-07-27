@@ -16,6 +16,7 @@ import pytest
 
 import cogindex
 from cogindex import CognifyProfile, DatasetHandle, DocumentPayload
+from cogindex._identity import COGINDEX_NAMESPACE, canonical_join
 from cogindex._records import DocumentRecord
 from cogindex._spec import CogneeDocumentSpec, document_record_for
 from cogindex._target import DocumentHandler, _DocumentAction
@@ -24,6 +25,7 @@ from cogindex.testing import FakeCogneeRuntime
 RUNTIME_KEY = "rt"
 TENANT = "default"
 DATASET = "ds"
+IDENTITY_SCOPE = "fake-default"
 PFP = "pfp"
 KEY = "docs/guide.md"
 
@@ -32,7 +34,11 @@ def make_handler(processing_fingerprint: str = PFP) -> DocumentHandler:
     return DocumentHandler(
         runtime=FakeCogneeRuntime(),
         runtime_key=RUNTIME_KEY,
-        handle=DatasetHandle(name=DATASET, tenant=TENANT),
+        handle=DatasetHandle(
+            name=DATASET,
+            tenant=TENANT,
+            identity_scope=IDENTITY_SCOPE,
+        ),
         profile=CognifyProfile(),
         processing_fingerprint=processing_fingerprint,
     )
@@ -56,7 +62,13 @@ def make_spec(
 
 
 def data_id_for(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY, TENANT, DATASET, key)
+    return cogindex.document_data_id(
+        RUNTIME_KEY,
+        IDENTITY_SCOPE,
+        TENANT,
+        DATASET,
+        key,
+    )
 
 
 def record_for(
@@ -264,6 +276,27 @@ def test_stale_data_id_is_collected_and_replaced() -> None:
     assert output.action.data_id == data_id_for(KEY)
 
 
+def test_identity_schema_one_record_migrates_by_delete_then_create() -> None:
+    spec = make_spec()
+    schema_one_id = uuid.uuid5(
+        COGINDEX_NAMESPACE,
+        canonical_join("1", RUNTIME_KEY, TENANT, DATASET, KEY),
+    )
+    assert schema_one_id != data_id_for(KEY)
+    previous = document_record_for(
+        spec,
+        data_id=schema_one_id,
+        processing_fingerprint=PFP,
+    )
+
+    output = reconcile(make_handler(), spec, [previous], False)
+
+    assert output is not None
+    assert output.action.op == "replace"
+    assert output.action.stale_data_ids == (schema_one_id,)
+    assert output.action.data_id == data_id_for(KEY)
+
+
 # -- deletion -----------------------------------------------------------------
 
 
@@ -310,7 +343,13 @@ def test_action_data_id_is_derived_from_logical_coordinates() -> None:
     for key in (KEY, "another/doc.txt", "id-42"):
         output = reconcile(make_handler(), make_spec(), [], True, key=key)
         assert output is not None
-        assert output.action.data_id == cogindex.document_data_id(RUNTIME_KEY, TENANT, DATASET, key)
+        assert output.action.data_id == cogindex.document_data_id(
+            RUNTIME_KEY,
+            IDENTITY_SCOPE,
+            TENANT,
+            DATASET,
+            key,
+        )
         assert output.action.external_key == key
 
 
@@ -318,7 +357,11 @@ def test_delete_action_data_id_is_derived_from_key() -> None:
     output = reconcile(make_handler(), coco.NON_EXISTENCE, [], True, key="gone.md")
     assert output is not None
     assert output.action.data_id == cogindex.document_data_id(
-        RUNTIME_KEY, TENANT, DATASET, "gone.md"
+        RUNTIME_KEY,
+        IDENTITY_SCOPE,
+        TENANT,
+        DATASET,
+        "gone.md",
     )
 
 

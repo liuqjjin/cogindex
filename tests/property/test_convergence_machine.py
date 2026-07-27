@@ -38,6 +38,7 @@ pytestmark = pytest.mark.property
 RUNTIME_KEY = "rt-prop"
 TENANT = "default"
 DATASET = "ds-prop"
+IDENTITY_SCOPE = "fake-default"
 
 # Two processing configurations; switching between them is the
 # config-invalidation transition (ADR-0005).
@@ -62,7 +63,13 @@ FAULT_OPS = [
 
 
 def _data_id(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY, TENANT, DATASET, key)
+    return cogindex.document_data_id(
+        RUNTIME_KEY,
+        IDENTITY_SCOPE,
+        TENANT,
+        DATASET,
+        key,
+    )
 
 
 class ConvergenceMachine(RuleBasedStateMachine):
@@ -74,7 +81,11 @@ class ConvergenceMachine(RuleBasedStateMachine):
         self.fake = FakeCogneeRuntime()
         self.declared: dict[str, CogneeDocumentSpec] = {}
         self.config_fp = "pfp-A"
-        handle = DatasetHandle(name=DATASET, tenant=TENANT)
+        handle = DatasetHandle(
+            name=DATASET,
+            tenant=TENANT,
+            identity_scope=IDENTITY_SCOPE,
+        )
         self.handlers = {
             fp: DocumentHandler(
                 runtime=self.fake,

@@ -10,13 +10,14 @@ from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from types import SimpleNamespace, TracebackType
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import cogindex._compat as compat_module
 import cogindex._runtime_local as runtime_module
 from cogindex import CompatibilityError
+from cogindex._identity import canonical_join, document_data_id
 from cogindex._runtime import DatasetHandle, DocumentPayload
 from cogindex._runtime_local import LocalCogneeRuntime
 from cogindex._spec import CognifyProfile
@@ -28,12 +29,26 @@ class _CompatHarness:
         self.configure_calls: list[tuple[str, str]] = []
         self.ensure_ready = AsyncMock()
         self.remote_mode = False
-        self.default_user_id = AsyncMock(return_value=uuid.uuid4())
+        self.default_user = SimpleNamespace(id=uuid.uuid4(), tenant_id=None)
+        self.resolve_default_user = AsyncMock(return_value=self.default_user)
+        self.resolve_user = AsyncMock(
+            side_effect=lambda user_id: SimpleNamespace(id=user_id, tenant_id=None)
+        )
         self.list_datasets = AsyncMock(return_value=[])
+        self.list_data = AsyncMock(return_value=[])
+        self.add = AsyncMock(return_value=SimpleNamespace(data_ingestion_info=[]))
+        self.cognify = AsyncMock(return_value={})
+        self.validate_embedding_dimensions = Mock(return_value=3072)
         self.compat = SimpleNamespace(
             remote_mode_check=lambda: self.remote_mode,
+            data_item_cls=lambda **kwargs: SimpleNamespace(**kwargs),
             cognee=SimpleNamespace(
-                datasets=SimpleNamespace(list_datasets=self.list_datasets),
+                add=self.add,
+                cognify=self.cognify,
+                datasets=SimpleNamespace(
+                    list_datasets=self.list_datasets,
+                    list_data=self.list_data,
+                ),
             ),
         )
 
@@ -69,8 +84,14 @@ def compat_harness(
     )
     monkeypatch.setattr(
         compat_module,
-        "default_user_id",
-        harness.default_user_id,
+        "resolve_default_user",
+        harness.resolve_default_user,
+    )
+    monkeypatch.setattr(compat_module, "resolve_user", harness.resolve_user)
+    monkeypatch.setattr(
+        compat_module,
+        "validate_embedding_dimensions",
+        harness.validate_embedding_dimensions,
     )
     return harness
 
@@ -172,6 +193,7 @@ async def test_remote_mode_enabled_after_setup_rejects_ready_and_add(
 ) -> None:
     runtime = _runtime(tmp_path)
     await runtime._ensure_ready()
+    handle = await runtime.resolve_dataset("remote-rejected", "default")
     compat_harness.remote_mode = True
 
     with pytest.raises(CompatibilityError, match=r"await cognee\.disconnect"):
@@ -180,34 +202,78 @@ async def test_remote_mode_enabled_after_setup_rejects_ready_and_add(
     payload = DocumentPayload(data_id=uuid.uuid4(), content="literal content")
     with pytest.raises(CompatibilityError, match="REST add endpoint"):
         await runtime.add_documents(
-            DatasetHandle(name="remote-rejected", tenant="default"),
+            handle,
             [payload],
         )
 
     compat_harness.ensure_ready.assert_awaited_once()
 
 
+async def test_add_rejects_embedding_dimension_change_after_pipeline(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    dataset = _dataset("docs", compat_harness.default_user.id)
+    compat_harness.list_datasets.return_value = [dataset]
+    compat_harness.validate_embedding_dimensions.side_effect = [
+        3072,
+        CompatibilityError("embedding dimensions changed"),
+    ]
+    runtime = _runtime(tmp_path)
+    handle = await runtime.resolve_dataset("docs", "default")
+
+    with pytest.raises(CompatibilityError, match="dimensions changed"):
+        await runtime.add_documents(
+            handle,
+            [DocumentPayload(data_id=uuid.uuid4(), content="literal content")],
+        )
+
+    compat_harness.add.assert_awaited_once()
+    assert compat_harness.validate_embedding_dimensions.call_count == 2
+
+
+async def test_cognify_rejects_embedding_dimension_change_after_pipeline(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    dataset = _dataset("docs", compat_harness.default_user.id)
+    compat_harness.list_datasets.return_value = [dataset]
+    compat_harness.validate_embedding_dimensions.side_effect = [
+        3072,
+        CompatibilityError("embedding dimensions changed"),
+    ]
+    runtime = _runtime(tmp_path)
+    handle = await runtime.resolve_dataset("docs", "default")
+
+    with pytest.raises(CompatibilityError, match="dimensions changed"):
+        await runtime.cognify_dataset(handle, CognifyProfile())
+
+    compat_harness.cognify.assert_awaited_once()
+    assert compat_harness.validate_embedding_dimensions.call_count == 2
+
+
 async def test_same_root_default_runtimes_share_dataset_lock(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    del compat_harness
     data_root, system_root = _roots(tmp_path)
     first = LocalCogneeRuntime(data_root=data_root, system_root=system_root)
     second = LocalCogneeRuntime(data_root=data_root, system_root=system_root)
-    handle = DatasetHandle(name="shared-lock", tenant="default")
+    first_handle = await first.resolve_dataset("shared-lock", "default")
+    second_handle = await second.resolve_dataset("shared-lock", "default")
+    assert first_handle.identity_scope == second_handle.identity_scope
     first_entered = asyncio.Event()
     release_first = asyncio.Event()
     second_entered = asyncio.Event()
 
     async def hold_first() -> None:
-        async with first.dataset_lock(handle):
+        async with first.dataset_lock(first_handle):
             first_entered.set()
             await release_first.wait()
 
     async def enter_second() -> None:
         await first_entered.wait()
-        async with second.dataset_lock(handle):
+        async with second.dataset_lock(second_handle):
             second_entered.set()
 
     first_task = asyncio.create_task(hold_first())
@@ -265,7 +331,7 @@ async def test_external_storage_root_mutation_fails_before_database_io(
         await runtime.resolve_dataset("docs", "default")
 
     compat_harness.ensure_ready.assert_not_awaited()
-    compat_harness.default_user_id.assert_not_awaited()
+    compat_harness.resolve_default_user.assert_not_awaited()
     compat_harness.list_datasets.assert_not_awaited()
 
 
@@ -295,18 +361,25 @@ class _FalseyLockProvider:
         return self.context
 
 
-def test_falsey_lock_provider_is_preserved(
+async def test_falsey_lock_provider_is_preserved(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    del compat_harness
     provider = _FalseyLockProvider()
     runtime = _runtime(tmp_path, lock_provider=provider)
+    handle = await runtime.resolve_dataset("docs", "default")
 
-    context = runtime.dataset_lock(DatasetHandle(name="docs", tenant="default"))
+    context = runtime.dataset_lock(handle)
 
     assert context is provider.context
-    assert provider.scopes == ["8:cogindex7:default4:docs"]
+    assert provider.scopes == [
+        canonical_join(
+            "cogindex",
+            handle.identity_scope,
+            "default",
+            "docs",
+        )
+    ]
 
 
 async def test_non_default_tenant_is_rejected_by_every_direct_operation(
@@ -314,7 +387,12 @@ async def test_non_default_tenant_is_rejected_by_every_direct_operation(
     compat_harness: _CompatHarness,
 ) -> None:
     runtime = _runtime(tmp_path)
-    handle = DatasetHandle(name="docs", tenant="other", dataset_id=uuid.uuid4())
+    handle = DatasetHandle(
+        name="docs",
+        tenant="other",
+        identity_scope=str(uuid.uuid4()),
+        dataset_id=uuid.uuid4(),
+    )
 
     with pytest.raises(ValueError, match="only tenant 'default'"):
         await runtime.resolve_dataset("docs", "other")
@@ -352,8 +430,21 @@ async def test_invalid_dataset_name_is_rejected_before_database_io(
     compat_harness.list_datasets.assert_not_awaited()
 
 
-def _dataset(name: str, owner_id: uuid.UUID) -> SimpleNamespace:
-    return SimpleNamespace(id=uuid.uuid4(), name=name, owner_id=owner_id)
+def _user(*, tenant_id: uuid.UUID | None = None) -> SimpleNamespace:
+    return SimpleNamespace(id=uuid.uuid4(), tenant_id=tenant_id)
+
+
+def _dataset(
+    name: str,
+    owner_id: uuid.UUID,
+    tenant_id: uuid.UUID | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        name=name,
+        owner_id=owner_id,
+        tenant_id=tenant_id,
+    )
 
 
 @pytest.mark.parametrize("owned_first", [False, True])
@@ -362,9 +453,8 @@ async def test_resolve_dataset_ignores_shared_same_name_regardless_of_order(
     compat_harness: _CompatHarness,
     owned_first: bool,
 ) -> None:
-    user_id = uuid.uuid4()
-    user = SimpleNamespace(id=user_id)
-    owned = _dataset("docs", user_id)
+    user = _user()
+    owned = _dataset("docs", user.id)
     shared = _dataset("docs", uuid.uuid4())
     compat_harness.list_datasets.return_value = [owned, shared] if owned_first else [shared, owned]
     runtime = _runtime(tmp_path, user=user)
@@ -372,14 +462,18 @@ async def test_resolve_dataset_ignores_shared_same_name_regardless_of_order(
     handle = await runtime.resolve_dataset("docs", "default")
 
     assert handle.dataset_id == owned.id
-    compat_harness.list_datasets.assert_awaited_once_with(user=user)
+    assert handle.identity_scope == runtime_module._physical_identity_scope(user)
+    resolved_user = compat_harness.resolve_user.await_args_list[0].args[0]
+    assert resolved_user == user.id
+    sdk_user = compat_harness.list_datasets.await_args_list[0].kwargs["user"]
+    assert (sdk_user.id, sdk_user.tenant_id) == (user.id, user.tenant_id)
 
 
 async def test_resolve_dataset_returns_missing_for_shared_only_same_name(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    user = SimpleNamespace(id=uuid.uuid4())
+    user = _user()
     compat_harness.list_datasets.return_value = [
         _dataset("docs", uuid.uuid4()),
         _dataset("other", user.id),
@@ -389,13 +483,14 @@ async def test_resolve_dataset_returns_missing_for_shared_only_same_name(
     handle = await runtime.resolve_dataset("docs", "default")
 
     assert handle.dataset_id is None
+    assert handle.identity_scope == runtime_module._physical_identity_scope(user)
 
 
 async def test_resolve_dataset_rejects_duplicate_owned_same_name(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    user = SimpleNamespace(id=uuid.uuid4())
+    user = _user()
     compat_harness.list_datasets.return_value = [
         _dataset("docs", user.id),
         _dataset("docs", user.id),
@@ -406,30 +501,196 @@ async def test_resolve_dataset_rejects_duplicate_owned_same_name(
         await runtime.resolve_dataset("docs", "default")
 
 
-async def test_resolve_dataset_uses_resolved_default_user_id(
+async def test_resolve_dataset_binds_and_passes_resolved_default_user(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    user_id = uuid.uuid4()
-    owned = _dataset("docs", user_id)
-    compat_harness.default_user_id.return_value = user_id
+    user = _user(tenant_id=uuid.uuid4())
+    owned = _dataset("docs", user.id, user.tenant_id)
+    compat_harness.resolve_default_user.return_value = user
     compat_harness.list_datasets.return_value = [owned]
     runtime = _runtime(tmp_path)
 
     handle = await runtime.resolve_dataset("docs", "default")
 
     assert handle.dataset_id == owned.id
-    compat_harness.default_user_id.assert_awaited_once_with()
+    assert handle.identity_scope == runtime_module._physical_identity_scope(user)
+    compat_harness.resolve_default_user.assert_awaited_once_with()
+    assert compat_harness.list_datasets.await_args_list[0].kwargs["user"] is user
+
+    await runtime.list_documents(handle)
+
+    assert compat_harness.list_data.await_count == 1
+    assert compat_harness.list_data.await_args_list[0].kwargs["user"] is user
+
+
+async def test_user_identity_separates_document_ids_and_lock_scopes(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    first_user = _user()
+    second_user = _user()
+    provider = _FalseyLockProvider()
+    first = _runtime(tmp_path, user=first_user, lock_provider=provider)
+    second = _runtime(tmp_path, user=second_user, lock_provider=provider)
+
+    first_handle = await first.resolve_dataset("docs", "default")
+    second_handle = await second.resolve_dataset("docs", "default")
+    first.dataset_lock(first_handle)
+    second.dataset_lock(second_handle)
+
+    assert first_handle.identity_scope == runtime_module._physical_identity_scope(first_user)
+    assert second_handle.identity_scope == runtime_module._physical_identity_scope(second_user)
+    assert provider.scopes == [
+        canonical_join("cogindex", first_handle.identity_scope, "default", "docs"),
+        canonical_join("cogindex", second_handle.identity_scope, "default", "docs"),
+    ]
+    assert document_data_id(
+        "runtime",
+        first_handle.identity_scope,
+        "default",
+        "docs",
+        "same.md",
+    ) != document_data_id(
+        "runtime",
+        second_handle.identity_scope,
+        "default",
+        "docs",
+        "same.md",
+    )
+
+
+async def test_rejects_handle_from_another_cognee_user(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    first_user = _user()
+    second_user = _user()
+    runtime = _runtime(tmp_path, user=first_user)
+    await runtime.resolve_dataset("docs", "default")
+    foreign_handle = DatasetHandle(
+        name="docs",
+        tenant="default",
+        identity_scope=runtime_module._physical_identity_scope(second_user),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        runtime.dataset_lock(foreign_handle)
 
 
 async def test_resolve_dataset_fails_when_acting_user_id_is_unavailable(
     tmp_path: Path,
     compat_harness: _CompatHarness,
 ) -> None:
-    compat_harness.default_user_id.return_value = None
+    compat_harness.resolve_default_user.return_value = SimpleNamespace(
+        id=None,
+        tenant_id=None,
+    )
     runtime = _runtime(tmp_path)
 
-    with pytest.raises(RuntimeError, match="cannot resolve"):
+    with pytest.raises(RuntimeError, match="no UUID id"):
         await runtime.resolve_dataset("docs", "default")
 
     compat_harness.list_datasets.assert_not_awaited()
+
+
+async def test_dataset_lookup_matches_owner_and_active_tenant(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    tenant = uuid.uuid4()
+    other_tenant = uuid.uuid4()
+    user = _user(tenant_id=tenant)
+    in_active_tenant = _dataset("docs", user.id, tenant)
+    same_owner_other_tenant = _dataset("docs", user.id, other_tenant)
+    compat_harness.resolve_user.side_effect = None
+    compat_harness.resolve_user.return_value = user
+    compat_harness.list_datasets.return_value = [
+        same_owner_other_tenant,
+        in_active_tenant,
+    ]
+    runtime = _runtime(tmp_path, user=user)
+
+    handle = await runtime.resolve_dataset("docs", "default")
+
+    assert handle.dataset_id == in_active_tenant.id
+
+
+async def test_same_user_different_tenants_separate_ids_and_lock_scopes(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    user_id = uuid.uuid4()
+    first_user = SimpleNamespace(id=user_id, tenant_id=uuid.uuid4())
+    second_user = SimpleNamespace(id=user_id, tenant_id=uuid.uuid4())
+    compat_harness.resolve_user.side_effect = [first_user, second_user]
+    provider = _FalseyLockProvider()
+    first = _runtime(tmp_path, user=first_user, lock_provider=provider)
+    second = _runtime(tmp_path, user=second_user, lock_provider=provider)
+
+    first_handle = await first.resolve_dataset("docs", "default")
+    second_handle = await second.resolve_dataset("docs", "default")
+    first.dataset_lock(first_handle)
+    second.dataset_lock(second_handle)
+
+    assert first_handle.identity_scope != second_handle.identity_scope
+    assert provider.scopes == [
+        canonical_join("cogindex", first_handle.identity_scope, "default", "docs"),
+        canonical_join("cogindex", second_handle.identity_scope, "default", "docs"),
+    ]
+    assert document_data_id(
+        "runtime",
+        first_handle.identity_scope,
+        "default",
+        "docs",
+        "same.md",
+    ) != document_data_id(
+        "runtime",
+        second_handle.identity_scope,
+        "default",
+        "docs",
+        "same.md",
+    )
+
+
+@pytest.mark.parametrize("drift_kind", ["user", "tenant"])
+async def test_default_user_scope_drift_fails_before_sdk_operation(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+    drift_kind: str,
+) -> None:
+    user_id = uuid.uuid4()
+    first = SimpleNamespace(id=user_id, tenant_id=uuid.uuid4())
+    drifted = SimpleNamespace(
+        id=uuid.uuid4() if drift_kind == "user" else user_id,
+        tenant_id=first.tenant_id if drift_kind == "user" else uuid.uuid4(),
+    )
+    dataset = _dataset("docs", user_id, first.tenant_id)
+    compat_harness.resolve_default_user.side_effect = [first, drifted]
+    compat_harness.list_datasets.return_value = [dataset]
+    runtime = _runtime(tmp_path)
+    handle = await runtime.resolve_dataset("docs", "default")
+
+    with pytest.raises(RuntimeError, match="changed after"):
+        await runtime.list_documents(handle)
+
+    compat_harness.list_data.assert_not_awaited()
+
+
+async def test_explicit_user_tenant_drift_fails_before_sdk_operation(
+    tmp_path: Path,
+    compat_harness: _CompatHarness,
+) -> None:
+    user_id = uuid.uuid4()
+    configured = SimpleNamespace(id=user_id, tenant_id=uuid.uuid4())
+    drifted = SimpleNamespace(id=user_id, tenant_id=uuid.uuid4())
+    dataset = _dataset("docs", user_id, configured.tenant_id)
+    compat_harness.resolve_user.side_effect = [configured, drifted]
+    compat_harness.list_datasets.return_value = [dataset]
+    runtime = _runtime(tmp_path, user=configured)
+    handle = await runtime.resolve_dataset("docs", "default")
+
+    with pytest.raises(RuntimeError, match="active tenant changed"):
+        await runtime.list_documents(handle)
+
+    compat_harness.list_data.assert_not_awaited()

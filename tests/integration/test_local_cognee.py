@@ -26,6 +26,7 @@ import cocoindex as coco
 import pytest
 
 import cogindex
+import cogindex._runtime_local as runtime_module
 from cogindex import (
     CognifyProfile,
     DatasetHandle,
@@ -53,8 +54,14 @@ ENTITY_TYPES = {
 }
 
 
-def did(dataset: str, key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY_NAME, TENANT, dataset, key)
+def did(handle: DatasetHandle, key: str) -> uuid.UUID:
+    return cogindex.document_data_id(
+        RUNTIME_KEY_NAME,
+        handle.identity_scope,
+        TENANT,
+        handle.name,
+        key,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +202,7 @@ async def test_literal_content_is_never_interpreted_as_a_path_or_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dataset = "int_literal_content"
+    handle = await runtime.resolve_dataset(dataset, TENANT)
     path_text = "looks-like-content.txt"
     url_text = "https://example.com/cogindex-must-not-fetch"
     bytes_text = b"Bob works for BetaCorp.\n"
@@ -202,9 +210,9 @@ async def test_literal_content_is_never_interpreted_as_a_path_or_url(
     monkeypatch.chdir(tmp_path)
 
     payloads = [
-        DocumentPayload(data_id=did(dataset, "path.md"), content=path_text, label="path"),
-        DocumentPayload(data_id=did(dataset, "url.md"), content=url_text, label="url"),
-        DocumentPayload(data_id=did(dataset, "bytes.md"), content=bytes_text, label="bytes"),
+        DocumentPayload(data_id=did(handle, "path.md"), content=path_text, label="path"),
+        DocumentPayload(data_id=did(handle, "url.md"), content=url_text, label="url"),
+        DocumentPayload(data_id=did(handle, "bytes.md"), content=bytes_text, label="bytes"),
     ]
     with (
         patch(
@@ -217,7 +225,7 @@ async def test_literal_content_is_never_interpreted_as_a_path_or_url(
         ) as fetch_page,
     ):
         handle = await runtime.add_documents(
-            DatasetHandle(name=dataset, tenant=TENANT),
+            handle,
             payloads,
         )
 
@@ -234,14 +242,153 @@ async def test_literal_content_is_never_interpreted_as_a_path_or_url(
     } == {payload.data_id: payload.label for payload in payloads}
 
 
+async def test_same_logical_key_isolated_between_cognee_users(
+    runtime: LocalCogneeRuntime,
+    storage_roots: tuple[str, str],
+    llm_mock: AsyncMock,
+) -> None:
+    """Cognee's Data.id is global, so the physical user must enter our id."""
+    del runtime, llm_mock  # fixtures establish the real stack and LLM check
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from cognee.modules.users.methods import create_user
+    from sqlalchemy import select
+
+    suffix = uuid.uuid4().hex
+    first_user = await create_user(
+        email=f"cogindex-first-{suffix}@example.com",
+        password="cogindex-test-password",
+    )
+    second_user = await create_user(
+        email=f"cogindex-second-{suffix}@example.com",
+        password="cogindex-test-password",
+    )
+    first = LocalCogneeRuntime(
+        data_root=storage_roots[0],
+        system_root=storage_roots[1],
+        user=first_user,
+    )
+    second = LocalCogneeRuntime(
+        data_root=storage_roots[0],
+        system_root=storage_roots[1],
+        user=second_user,
+    )
+    first_handle = await first.resolve_dataset("same-name", TENANT)
+    second_handle = await second.resolve_dataset("same-name", TENANT)
+    first_id = did(first_handle, "same.md")
+    second_id = did(second_handle, "same.md")
+
+    assert first_handle.identity_scope == runtime_module._physical_identity_scope(first_user)
+    assert second_handle.identity_scope == runtime_module._physical_identity_scope(second_user)
+    assert first_id != second_id
+
+    first_handle = await first.add_documents(
+        first_handle,
+        [DocumentPayload(data_id=first_id, content="first user content", label="first")],
+    )
+    second_handle = await second.add_documents(
+        second_handle,
+        [DocumentPayload(data_id=second_id, content="second user content", label="second")],
+    )
+
+    assert [document.data_id for document in await first.list_documents(first_handle)] == [first_id]
+    assert [document.data_id for document in await second.list_documents(second_handle)] == [
+        second_id
+    ]
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        rows = await session.execute(
+            select(Data.id, Data.owner_id).where(Data.id.in_([first_id, second_id]))
+        )
+        owners = dict(rows.all())
+    assert owners == {
+        first_id: first_user.id,
+        second_id: second_user.id,
+    }
+
+
+async def test_same_user_isolated_between_active_tenants(
+    runtime: LocalCogneeRuntime,
+    storage_roots: tuple[str, str],
+    llm_mock: AsyncMock,
+) -> None:
+    """One user can own same-name datasets in two independently keyed tenants."""
+    del runtime, llm_mock  # fixtures establish the real stack and LLM check
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.models import Data
+    from cognee.modules.users.methods import create_user, get_user
+    from cognee.modules.users.tenants.methods import create_tenant, select_tenant
+    from sqlalchemy import select
+
+    suffix = uuid.uuid4().hex
+    user = await create_user(
+        email=f"cogindex-multitenant-{suffix}@example.com",
+        password="cogindex-test-password",
+    )
+    first_tenant = await create_tenant(f"cogindex-first-{suffix}", user.id)
+    first_user = await get_user(user.id)
+    first = LocalCogneeRuntime(
+        data_root=storage_roots[0],
+        system_root=storage_roots[1],
+        user=first_user,
+    )
+    first_handle = await first.resolve_dataset("same-name", TENANT)
+    first_id = did(first_handle, "same.md")
+    first_handle = await first.add_documents(
+        first_handle,
+        [DocumentPayload(data_id=first_id, content="first tenant content", label="first")],
+    )
+
+    second_tenant = await create_tenant(f"cogindex-second-{suffix}", user.id)
+    second_user = await get_user(user.id)
+    second = LocalCogneeRuntime(
+        data_root=storage_roots[0],
+        system_root=storage_roots[1],
+        user=second_user,
+    )
+    second_handle = await second.resolve_dataset("same-name", TENANT)
+    second_id = did(second_handle, "same.md")
+    second_handle = await second.add_documents(
+        second_handle,
+        [DocumentPayload(data_id=second_id, content="second tenant content", label="second")],
+    )
+
+    assert first_user.id == second_user.id
+    assert first_user.tenant_id == first_tenant
+    assert second_user.tenant_id == second_tenant
+    assert first_handle.identity_scope != second_handle.identity_scope
+    assert first_id != second_id
+
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        rows = await session.execute(
+            select(Data.id, Data.owner_id, Data.tenant_id).where(Data.id.in_([first_id, second_id]))
+        )
+        coordinates = {
+            data_id: (owner_id, tenant_id) for data_id, owner_id, tenant_id in rows.all()
+        }
+    assert coordinates == {
+        first_id: (user.id, first_tenant),
+        second_id: (user.id, second_tenant),
+    }
+
+    await select_tenant(user_id=user.id, tenant_id=first_tenant)
+    assert [document.data_id for document in await first.list_documents(first_handle)] == [first_id]
+    await select_tenant(user_id=user.id, tenant_id=second_tenant)
+    assert [document.data_id for document in await second.list_documents(second_handle)] == [
+        second_id
+    ]
+
+
 async def test_lifecycle_replace_and_shared_entity_provenance(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
     dataset = "int_lifecycle"
-    id_bob = did(dataset, "bob.md")
-    id_carol = did(dataset, "carol.md")
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    id_bob = did(handle, "bob.md")
+    id_carol = did(handle, "carol.md")
     handle = await runtime.add_documents(
-        DatasetHandle(name=dataset, tenant=TENANT),
+        handle,
         [
             DocumentPayload(data_id=id_bob, content="Bob works for SharedOrg and AlphaCorp."),
             DocumentPayload(data_id=id_carol, content="Carol works for SharedOrg."),
@@ -290,9 +437,10 @@ async def test_tracking_loss_recovery_requires_hard_dataset_teardown(
     import cogindex._compat as compat_module
 
     dataset = "int_tracking_loss"
-    ids = [did(dataset, "kept.md"), did(dataset, "deleted-at-source.md")]
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    ids = [did(handle, "kept.md"), did(handle, "deleted-at-source.md")]
     handle = await runtime.add_documents(
-        DatasetHandle(name=dataset, tenant=TENANT),
+        handle,
         [
             DocumentPayload(data_id=ids[0], content="Bob works for AlphaCorp."),
             DocumentPayload(data_id=ids[1], content="Carol works for SharedOrg."),
@@ -338,9 +486,10 @@ async def test_batch_purge_opens_one_database_context_for_the_whole_batch(
     import cogindex._compat as compat_module
 
     dataset = "int_batch_purge"
-    ids = [did(dataset, f"doc-{i}.md") for i in range(5)]
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    ids = [did(handle, f"doc-{i}.md") for i in range(5)]
     handle = await runtime.add_documents(
-        DatasetHandle(name=dataset, tenant=TENANT),
+        handle,
         [
             DocumentPayload(data_id=data_id, content=f"Bob works for AlphaCorp, note {i}.")
             for i, data_id in enumerate(ids)
@@ -388,10 +537,11 @@ async def test_label_only_readd_upserts_in_place_and_keeps_derivatives(
     pipeline status and stores the new label.
     """
     dataset = "int_metadata"
-    data_id = did(dataset, "doc.md")
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    data_id = did(handle, "doc.md")
     content = "Bob works for AlphaCorp."
     handle = await runtime.add_documents(
-        DatasetHandle(name=dataset, tenant=TENANT),
+        handle,
         [DocumentPayload(data_id=data_id, content=content, label="first")],
     )
     await runtime.cognify_dataset(handle, CognifyProfile())
@@ -429,11 +579,12 @@ async def test_incremental_cognify_skips_completed_items(
     runtime: LocalCogneeRuntime, llm_mock: AsyncMock
 ) -> None:
     dataset = "int_incremental"
+    handle = await runtime.resolve_dataset(dataset, TENANT)
     handle = await runtime.add_documents(
-        DatasetHandle(name=dataset, tenant=TENANT),
+        handle,
         [
-            DocumentPayload(data_id=did(dataset, "a.md"), content="Bob works for AlphaCorp."),
-            DocumentPayload(data_id=did(dataset, "b.md"), content="Carol works for SharedOrg."),
+            DocumentPayload(data_id=did(handle, "a.md"), content="Bob works for AlphaCorp."),
+            DocumentPayload(data_id=did(handle, "b.md"), content="Carol works for SharedOrg."),
         ],
     )
     await runtime.cognify_dataset(handle, CognifyProfile())
@@ -447,7 +598,7 @@ async def test_incremental_cognify_skips_completed_items(
     # A third document triggers processing again, and the first two stay done.
     await runtime.add_documents(
         handle,
-        [DocumentPayload(data_id=did(dataset, "c.md"), content="BetaCorp exists.")],
+        [DocumentPayload(data_id=did(handle, "c.md"), content="BetaCorp exists.")],
     )
     await runtime.cognify_dataset(handle, CognifyProfile())
     assert llm_mock.call_count > calls_after_first
@@ -552,7 +703,7 @@ async def test_engine_end_to_end_with_real_cognee(
     )
     assert report.ok, report.render()
     stored = await runtime.list_documents(handle)
-    assert [document.data_id for document in stored] == [did(dataset, "bob.md")]
+    assert [document.data_id for document in stored] == [did(handle, "bob.md")]
 
 
 async def test_external_metadata_change_rebuilds_derivatives(
@@ -593,7 +744,8 @@ async def test_importance_weight_change_recreates_raw_data_row(
 ) -> None:
     """Cognee's existing-row add path omits importance_weight updates."""
     dataset = "int_importance_weight"
-    data_id = did(dataset, "doc.md")
+    handle = await runtime.resolve_dataset(dataset, TENANT)
+    data_id = did(handle, "doc.md")
     env = create_test_env(__file__, suffix="importance_weight")
     env.context_provider.provide(_RUNTIME_KEY, runtime)
 

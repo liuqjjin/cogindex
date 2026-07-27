@@ -36,7 +36,7 @@ COGINDEX_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "cogindex")
 # Bump only when the identity derivation itself changes incompatibly. A bump
 # gives every managed document a new data_id, which reconciles as delete of
 # the old identity + create of the new one.
-IDENTITY_SCHEMA_VERSION = 1
+IDENTITY_SCHEMA_VERSION = 2
 
 _FINGERPRINT_DIGEST_SIZE = 16
 _RUNTIME_KEY_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -67,10 +67,15 @@ def normalize_external_key(key: str) -> str:
 
 
 def document_data_id(
-    runtime_key: str, tenant: str, dataset_name: str, external_key: str
+    runtime_key: str,
+    identity_scope: str,
+    tenant: str,
+    dataset_name: str,
+    external_key: str,
 ) -> uuid.UUID:
     """Derive the stable Cognee ``data_id`` for a document (ADR-0002)."""
     _validate_runtime_key(runtime_key)
+    _validate_coordinate(identity_scope, "identity_scope")
     _validate_coordinate(tenant, "tenant")
     _validate_coordinate(dataset_name, "dataset_name")
     return uuid.uuid5(
@@ -78,6 +83,7 @@ def document_data_id(
         canonical_join(
             str(IDENTITY_SCHEMA_VERSION),
             runtime_key,
+            identity_scope,
             tenant,
             dataset_name,
             normalize_external_key(external_key),

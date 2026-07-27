@@ -174,7 +174,11 @@ class DocumentHandler(coco.TargetHandler[CogneeDocumentSpec, DocumentRecord, Non
             raise TypeError(f"document key must be str, got {type(key).__name__}")
         external_key = normalize_external_key(key)
         data_id = document_data_id(
-            self._runtime_key, self._handle.tenant, self._handle.name, external_key
+            self._runtime_key,
+            self._handle.identity_scope,
+            self._handle.tenant,
+            self._handle.name,
+            external_key,
         )
         stale_data_ids = tuple(
             sorted(
@@ -412,9 +416,11 @@ async def _apply_dataset_actions(
             # main_action is None here when ownership resolution said hands
             # off (user-managed data): the dataset's content is left alone.
             if action.main_action == "delete":
-                handle = DatasetHandle(
-                    name=action.key.dataset_name,
-                    tenant=action.key.tenant,
+                # Resolve first: both identity and lock scope are physical-user
+                # scoped, and a missing dataset still has a valid scope.
+                handle = await runtime.resolve_dataset(
+                    action.key.dataset_name,
+                    action.key.tenant,
                 )
                 async with runtime.dataset_lock(handle):
                     await runtime.teardown_dataset(handle)

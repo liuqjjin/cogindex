@@ -115,7 +115,7 @@ def _check_storage_roots() -> list[DoctorFinding]:
                     check="storage-roots",
                     detail=f"{label} points inside the installed package: {path}",
                     fix_hint=(
-                        "pass data_root=/system_root= to LocalCogneeRuntime or "
+                        "pass data_root=... and system_root=... to LocalCogneeRuntime or "
                         "set DATA_ROOT_DIRECTORY / SYSTEM_ROOT_DIRECTORY"
                     ),
                 )

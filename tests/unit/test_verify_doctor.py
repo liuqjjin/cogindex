@@ -25,10 +25,17 @@ from cogindex.testing import FakeCogneeRuntime
 RUNTIME_KEY = coco.ContextKey[cogindex.CogneeRuntime]("rt-verify")
 TENANT = "default"
 DATASET = "ds-verify"
+IDENTITY_SCOPE = "fake-default"
 
 
-def did(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY.key, TENANT, DATASET, key)
+def did(key: str, *, identity_scope: str = IDENTITY_SCOPE) -> uuid.UUID:
+    return cogindex.document_data_id(
+        RUNTIME_KEY.key,
+        identity_scope,
+        TENANT,
+        DATASET,
+        key,
+    )
 
 
 def payload(key: str, content: str, *, label: str | None = None) -> DocumentPayload:
@@ -38,7 +45,8 @@ def payload(key: str, content: str, *, label: str | None = None) -> DocumentPayl
 async def seed(
     runtime: FakeCogneeRuntime, payloads: list[DocumentPayload], *, cognify: bool = True
 ) -> DatasetHandle:
-    handle = await runtime.add_documents(DatasetHandle(name=DATASET, tenant=TENANT), payloads)
+    handle = await runtime.resolve_dataset(DATASET, TENANT)
+    handle = await runtime.add_documents(handle, payloads)
     if cognify:
         await runtime.cognify_dataset(handle, CognifyProfile())
     return handle
@@ -149,6 +157,30 @@ async def test_verify_key_normalization_matches_target_identity() -> None:
     report = await verify_dataset(
         runtime, RUNTIME_KEY, DATASET, [ExpectedDocument(nfd)], tenant=TENANT
     )
+    assert report.ok
+
+
+async def test_verify_uses_runtime_resolved_identity_scope() -> None:
+    identity_scope = "other-cognee-user"
+    runtime = FakeCogneeRuntime(identity_scope=identity_scope)
+    await seed(
+        runtime,
+        [
+            DocumentPayload(
+                data_id=did("a.md", identity_scope=identity_scope),
+                content="alpha",
+            )
+        ],
+    )
+
+    report = await verify_dataset(
+        runtime,
+        RUNTIME_KEY,
+        DATASET,
+        [ExpectedDocument("a.md")],
+        tenant=TENANT,
+    )
+
     assert report.ok
 
 

@@ -17,13 +17,27 @@ __all__ = ["CogneeRuntime", "DatasetHandle", "DocumentPayload", "StoredDocument"
 class DatasetHandle:
     """Reference to a (possibly not-yet-materialized) Cognee dataset.
 
+    ``identity_scope`` is the runtime-resolved, non-secret identity of the
+    physical ownership coordinates that own document rows. It is part of both
+    document identity and the dataset lock key. Runtimes must return it even
+    when the dataset does not exist.
+
     ``dataset_id`` is None until the dataset exists: Cognee creates datasets
     implicitly on first ``add()``. There is no public create API.
     """
 
     name: str
     tenant: str
+    identity_scope: str
     dataset_id: uuid.UUID | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity_scope, str):
+            raise TypeError(f"identity_scope must be str, got {type(self.identity_scope).__name__}")
+        if not self.identity_scope:
+            raise ValueError("identity_scope must be non-empty")
+        if "\x00" in self.identity_scope:
+            raise ValueError("identity_scope must not contain NUL characters")
 
 
 @dataclass(frozen=True)
@@ -64,7 +78,12 @@ class CogneeRuntime(Protocol):
     """
 
     async def resolve_dataset(self, name: str, tenant: str) -> DatasetHandle:
-        """Look up the dataset; ``dataset_id`` is None if it does not exist."""
+        """Look up the dataset and its physical identity scope.
+
+        ``dataset_id`` is None if the dataset does not exist. The returned
+        ``identity_scope`` must still identify where a future add would
+        materialize it.
+        """
         ...
 
     async def add_documents(
@@ -113,5 +132,8 @@ class CogneeRuntime(Protocol):
         ...
 
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
-        """Serialize document batches and teardown per dataset (ADR-0006)."""
+        """Serialize document batches and teardown per physical dataset.
+
+        The lock scope includes ``handle.identity_scope`` (ADR-0006).
+        """
         ...

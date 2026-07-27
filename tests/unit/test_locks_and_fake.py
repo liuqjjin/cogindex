@@ -41,6 +41,7 @@ from cogindex.testing import FakeCogneeRuntime, FakeDocument, InjectedFault
 
 TENANT = "default"
 DATASET = "ds"
+IDENTITY_SCOPE = "fake-default"
 
 
 def _data_id(name: str) -> uuid.UUID:
@@ -48,7 +49,11 @@ def _data_id(name: str) -> uuid.UUID:
 
 
 def _handle() -> DatasetHandle:
-    return DatasetHandle(name=DATASET, tenant=TENANT)
+    return DatasetHandle(
+        name=DATASET,
+        tenant=TENANT,
+        identity_scope=IDENTITY_SCOPE,
+    )
 
 
 def _document(runtime: FakeCogneeRuntime, data_id: uuid.UUID) -> FakeDocument:
@@ -390,7 +395,11 @@ async def test_cognify_gate_ignores_profile_change() -> None:
 
 async def test_missing_targets_are_noops_and_teardown_removes_dataset() -> None:
     runtime = FakeCogneeRuntime()
-    missing_handle = DatasetHandle(name="never-created", tenant=TENANT)
+    missing_handle = DatasetHandle(
+        name="never-created",
+        tenant=TENANT,
+        identity_scope=IDENTITY_SCOPE,
+    )
     ghost_id = _data_id("ghost")
 
     # Missing dataset: all removal ops succeed as no-ops.

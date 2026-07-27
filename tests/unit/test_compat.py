@@ -16,6 +16,7 @@ Two kinds of assertion live here and they are worth keeping apart:
 
 from __future__ import annotations
 
+import enum
 import importlib
 import inspect
 
@@ -131,11 +132,197 @@ def test_cognify_defaults_are_readable_from_its_signature() -> None:
     assert info.default_chunk_size is None or isinstance(info.default_chunk_size, int)
 
 
-def test_configured_models_reports_model_and_vector_width() -> None:
-    llm_model, embedding_model, dimensions = _compat.configured_models()
-    assert llm_model
-    assert embedding_model
-    assert dimensions is None or dimensions > 0
+def test_configured_processing_inputs_cover_real_cognee_surfaces() -> None:
+    inputs = _compat.configured_processing_inputs(
+        uses_custom_graph_prompt=False,
+        temporal_cognify=False,
+    )
+
+    assert inputs["cognee_version"].startswith("1.4.")
+    assert inputs["llm"]["base"]["provider"]
+    assert inputs["llm"]["base"]["model"]
+    assert inputs["llm"]["extraction"]["model"]
+    assert inputs["llm"]["summarization"]["model"]
+    assert inputs["embedding"]["provider"]
+    assert inputs["embedding"]["model"]
+    assert inputs["embedding"]["dimensions"] > 0
+    assert inputs["embedding"]["max_completion_tokens"] > 0
+    assert inputs["cognify"]["classification_model"]["schema"]
+    assert inputs["cognify"]["summarization_model"]["schema"]
+    assert set(inputs["prompts"]) == {"classification", "graph", "summary"}
+    assert all(inputs["prompts"].values())
+
+
+def test_model_arg_sanitizer_recursively_excludes_secrets_and_execution_knobs() -> None:
+    first = _compat._canonical_model_args(
+        {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "seed": 7,
+            "logit_bias": {"42": -1},
+            "nested": {
+                "auth": "first-auth",
+                "api_key": "first-secret",
+                "endpoint": "https://first.invalid",
+                "headers": {"Authorization": "Bearer first-secret"},
+                "timeout": 10,
+                "retry_count": 2,
+                "batch_size": 8,
+                "rate_limit": 60,
+                "embedding_rate_limit_enabled": True,
+                "logger_name": "first",
+                "max_retry_count": 2,
+                "request_batch_size": 8,
+            },
+        }
+    )
+    second = _compat._canonical_model_args(
+        {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "seed": 7,
+            "logit_bias": {"42": -1},
+            "nested": {
+                "auth": "second-auth",
+                "api_key": "second-secret",
+                "endpoint": "https://second.invalid",
+                "headers": {"Authorization": "Bearer second-secret"},
+                "timeout": 90,
+                "retry_count": 9,
+                "batch_size": 64,
+                "rate_limit": 1,
+                "embedding_rate_limit_enabled": False,
+                "logger_name": "second",
+                "max_retry_count": 9,
+                "request_batch_size": 64,
+            },
+        }
+    )
+
+    assert (
+        first
+        == second
+        == {
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "seed": 7,
+            "logit_bias": {"42": -1},
+        }
+    )
+
+
+def test_model_arg_sanitizer_preserves_generation_and_provider_specific_args() -> None:
+    assert _compat._canonical_model_args(
+        {
+            "parallel_tool_calls": True,
+            "mirostat_tau": 5.0,
+            "top_k": 40,
+            "stop_token_ids": (1, 2),
+        }
+    ) == {
+        "parallel_tool_calls": True,
+        "mirostat_tau": 5.0,
+        "top_k": 40,
+        "stop_token_ids": [1, 2],
+    }
+
+
+def test_model_arg_sanitizer_filters_extra_body_as_parameter_namespace() -> None:
+    assert _compat._canonical_model_args(
+        {
+            "extra_body": {
+                "top_k": 40,
+                "api_key": "secret",
+                "endpoint": "https://provider.invalid",
+            }
+        }
+    ) == {"extra_body": {"top_k": 40}}
+
+
+def test_model_arg_sanitizer_preserves_schema_keys_and_content_urls() -> None:
+    args = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "api_key": {"type": "string"},
+                            "endpoint": {"type": "string", "format": "uri"},
+                        },
+                    },
+                },
+            }
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "result",
+                "schema": {"$id": "https://schemas.invalid/result", "type": "object"},
+            },
+        },
+    }
+
+    assert _compat._canonical_model_args(args) == args
+
+
+def test_model_arg_sanitizer_fails_closed_for_url_under_unknown_field() -> None:
+    with pytest.raises(ValueError, match="unrecognized field"):
+        _compat._canonical_model_args({"resource": "https://example.invalid/model"})
+
+
+def test_model_arg_sanitizer_fails_closed_for_ambiguous_secret_shaped_field() -> None:
+    with pytest.raises(ValueError, match="secret-shaped"):
+        _compat._canonical_model_args({"vendor_key": "could-be-secret-or-selector"})
+
+
+def test_litellm_core_model_args_have_an_explicit_policy() -> None:
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+
+    classified = (
+        _compat._GENERATION_MODEL_ARG_FIELDS
+        | _compat._NESTED_MODEL_ARG_FIELDS
+        | _compat._EXCLUDED_MODEL_ARG_FIELDS
+    )
+    assert set(OPENAI_CHAT_COMPLETION_PARAMS) <= classified
+    assert _compat._GENERATION_MODEL_ARG_FIELDS.isdisjoint(_compat._EXCLUDED_MODEL_ARG_FIELDS)
+    assert "parallel_tool_calls" in _compat._GENERATION_MODEL_ARG_FIELDS
+    assert "auth" in _compat._EXCLUDED_MODEL_ARG_FIELDS
+
+
+def test_model_arg_sanitizer_preserves_enum_and_sequence_generation_values() -> None:
+    class ResponseMode(enum.Enum):
+        STRICT = "strict"
+
+    assert _compat._canonical_model_args(
+        {
+            "response_mode": ResponseMode.STRICT,
+            "stop": ("END", "STOP"),
+            "logprobs": True,
+        }
+    ) == {
+        "response_mode": "strict",
+        "stop": ["END", "STOP"],
+        "logprobs": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        ({"temperature": float("nan")}, ValueError),
+        ({1: "non-string key"}, TypeError),
+        ({"response_format": object()}, TypeError),
+    ],
+)
+def test_model_arg_sanitizer_rejects_noncanonical_values(
+    args: object,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        _compat._canonical_model_args(args)
 
 
 def test_storage_roots_are_readable() -> None:
@@ -156,11 +343,34 @@ def _break_import(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(importlib, "import_module", raise_on_import)
 
 
-def test_configured_models_degrades_to_none_when_config_moves(
+def test_configured_processing_inputs_fail_closed_when_config_moves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _break_import(monkeypatch)
-    assert _compat.configured_models() == (None, None, None)
+    with pytest.raises(CompatibilityError, match="explicit ProcessingConfig"):
+        _compat.configured_processing_inputs(
+            uses_custom_graph_prompt=False,
+            temporal_cognify=False,
+        )
+
+
+def test_configured_processing_inputs_preserves_specific_compatibility_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = CompatibilityError("specific compatibility failure")
+
+    def fail_load() -> _compat.CogneeCompat:
+        raise expected
+
+    monkeypatch.setattr(_compat, "load", fail_load)
+
+    with pytest.raises(CompatibilityError) as caught:
+        _compat.configured_processing_inputs(
+            uses_custom_graph_prompt=False,
+            temporal_cognify=False,
+        )
+
+    assert caught.value is expected
 
 
 def test_storage_roots_degrade_to_none_when_config_moves(

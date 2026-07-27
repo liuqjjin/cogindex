@@ -13,6 +13,7 @@ from typing import Literal, cast
 import pytest
 
 from cogindex import _compat
+from cogindex import _runtime_local as runtime_module
 from cogindex._runtime import DatasetHandle
 from cogindex._runtime_local import LocalCogneeRuntime
 
@@ -41,14 +42,17 @@ async def _noop_dataset_context(*args: object) -> AsyncIterator[None]:
 
 def _runtime_with_forget_error(
     monkeypatch: pytest.MonkeyPatch, error: BaseException
-) -> LocalCogneeRuntime:
+) -> tuple[LocalCogneeRuntime, str]:
     missing_errors = _compat.load().dataset_missing_errors
     test_root = Path("/tmp/cogindex-runtime-delete-tests")
+    user = SimpleNamespace(id=uuid.uuid4(), tenant_id=None)
     runtime = LocalCogneeRuntime(
         data_root=test_root / "data",
         system_root=test_root / "system",
-        user=SimpleNamespace(id=uuid.uuid4()),
+        user=user,
     )
+    identity_scope = runtime_module._physical_identity_scope(user)
+    runtime._resolved_identity_scope = identity_scope
     compat_info = SimpleNamespace(
         cognee=_CogneeThatRaises(error),
         dataset_missing_errors=missing_errors,
@@ -61,7 +65,13 @@ def _runtime_with_forget_error(
 
     monkeypatch.setattr(_compat, "ensure_databases_ready", ensure_ready)
     monkeypatch.setattr(_compat, "dataset_database_context", _noop_dataset_context)
-    return runtime
+
+    async def resolve_user(user_id: uuid.UUID) -> SimpleNamespace:
+        assert user_id == user.id
+        return user
+
+    monkeypatch.setattr(_compat, "resolve_user", resolve_user)
+    return runtime, identity_scope
 
 
 async def _delete(
@@ -83,12 +93,20 @@ async def test_explicit_dataset_not_found_is_an_idempotent_noop(
     monkeypatch: pytest.MonkeyPatch, operation: DeleteOperation
 ) -> None:
     dataset_not_found, _ = _upstream_error_types()
-    runtime = _runtime_with_forget_error(monkeypatch, dataset_not_found("gone"))
+    runtime, identity_scope = _runtime_with_forget_error(
+        monkeypatch,
+        dataset_not_found("gone"),
+    )
 
     await _delete(
         runtime,
         operation,
-        DatasetHandle(name="docs", tenant="default", dataset_id=uuid.uuid4()),
+        DatasetHandle(
+            name="docs",
+            tenant="default",
+            identity_scope=identity_scope,
+            dataset_id=uuid.uuid4(),
+        ),
         uuid.uuid4(),
     )
 
@@ -106,13 +124,18 @@ async def test_ambiguous_or_unauthorized_delete_errors_propagate(
         if error_kind == "unauthorized"
         else ValueError("not found or not accessible")
     )
-    runtime = _runtime_with_forget_error(monkeypatch, error)
+    runtime, identity_scope = _runtime_with_forget_error(monkeypatch, error)
 
     with pytest.raises(type(error)) as exc_info:
         await _delete(
             runtime,
             operation,
-            DatasetHandle(name="docs", tenant="default", dataset_id=uuid.uuid4()),
+            DatasetHandle(
+                name="docs",
+                tenant="default",
+                identity_scope=identity_scope,
+                dataset_id=uuid.uuid4(),
+            ),
             uuid.uuid4(),
         )
     assert exc_info.value is error

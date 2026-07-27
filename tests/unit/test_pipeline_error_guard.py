@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from cogindex import CogindexError
 from cogindex._runtime_local import CogneePipelineError, _raise_on_errored_runs
 
 
@@ -46,6 +47,16 @@ def test_add_result_with_errored_run_raises() -> None:
     )
     with pytest.raises(CogneePipelineError, match="errored pipeline run"):
         _raise_on_errored_runs(result, op="add", dataset="ds")
+
+
+def test_pipeline_error_is_catchable_as_cogindex_error() -> None:
+    result = PipelineRunErrored(payload="pipeline failed")
+
+    with pytest.raises(CogindexError) as exc_info:
+        _raise_on_errored_runs(result, op="add", dataset="ds")
+
+    assert isinstance(exc_info.value, CogneePipelineError)
+    assert isinstance(exc_info.value, RuntimeError)
 
 
 def test_add_result_error_message_does_not_copy_upstream_payload() -> None:

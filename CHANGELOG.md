@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Include the runtime-resolved Cognee user id and active tenant id in document
+  UUID5 identities and dataset lock keys. Identity schema 2 prevents users or
+  tenants sharing storage roots from colliding on Cognee's global `Data.id`;
+  existing same-scope records migrate as stale-id delete plus create on their
+  next sync.
+- Expand automatic processing invalidation to cover the effective Cognee
+  version, LLM and embedding settings, prompts, schemas, chunking, ontology,
+  and extraction modes. Credentials and operational connection settings remain
+  outside tracking records. Unknown or drifting embedding dimensions now fail
+  before a sync can be confirmed.
+- Make `CogneePipelineError` part of the public `CogindexError` hierarchy
+  while retaining `RuntimeError` compatibility.
 - Rebuilt `baseline_comparison` as a correctness-gated comparison between a
   hard full rebuild and a fixed, disjoint edit/delete set. It records three
   timing samples, observed write counts, stored-document checks and real graph

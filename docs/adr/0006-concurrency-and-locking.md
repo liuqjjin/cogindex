@@ -30,14 +30,16 @@ one dataset) and every system-managed dataset teardown:
 - `PostgresAdvisoryLockProvider` (extra: `cogindex[postgres]`): cross-process
   implementation using PostgreSQL session-level advisory locks. It polls
   `pg_try_advisory_lock(bigint)` through asyncpg. Key mapping:
-  `BLAKE2b-64(canonical(tenant, dataset_key)) → signed int64`, deterministic
-  across workers. A hash collision only adds serialization; it cannot allow
-  overlapping connector writes.
+  `BLAKE2b-64(canonical("cogindex", physical_identity_scope, tenant,
+  dataset_key)) → signed int64`, deterministic across workers. A hash
+  collision only adds serialization; it cannot allow overlapping connector
+  writes.
 
 Contract (uniform across providers):
 
-- lock keys derive from stable logical identity (tenant/user + dataset key),
-  never from connection details;
+- lock keys derive from the runtime-resolved physical identity scope (Cognee
+  user id plus active tenant id), logical tenant and dataset key, never from
+  connection details;
 - acquisition takes a configurable timeout covering connection and polling,
   and raises `LockTimeoutError` with the logical scope and advisory key;
 - locks are held for the duration of one document batch or one teardown and
@@ -70,6 +72,13 @@ harmless outer guard and can be retired by configuration.
   it, and the older operation may finish last. The lock does not provide
   generation fencing, so operators must not run two different desired-state
   generations for the same dataset concurrently.
+- A dataset handle must be resolved before locking. This supplies the
+  physical scope even for a missing dataset; constructing a name-only handle
+  would collapse different Cognee users or active tenants onto one lock key.
+- The lock does not preserve the historical scope of a `ContextKey` across
+  separate runs. Rebinding that key to another Cognee user or active tenant
+  can make teardown resolve and lock the current same-name dataset. ADR-0002
+  therefore forbids such rebinding while old tracking state exists.
 
 `tests/unit/test_fault_matrix.py::test_concurrent_batches_serialize_under_dataset_lock`
 asserts that two document batches do not overlap.

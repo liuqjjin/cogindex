@@ -113,9 +113,21 @@ class FakeCogneeRuntime:
     entry lists exactly the payloads that were applied before the fault.
     """
 
-    def __init__(self, *, lock_provider: LockProvider | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        identity_scope: str = "fake-default",
+        lock_provider: LockProvider | None = None,
+    ) -> None:
+        if not isinstance(identity_scope, str):
+            raise TypeError(f"identity_scope must be str, got {type(identity_scope).__name__}")
+        if not identity_scope:
+            raise ValueError("identity_scope must be non-empty")
+        if "\x00" in identity_scope:
+            raise ValueError("identity_scope must not contain NUL characters")
         self.datasets: dict[tuple[str, str], FakeDataset] = {}
         self.calls: list[tuple[str, str, tuple[str, ...]]] = []
+        self._identity_scope = identity_scope
         self._lock_provider: LockProvider = lock_provider or InProcessLockProvider()
         self._faults: dict[str, list[_Fault]] = {}
 
@@ -182,12 +194,14 @@ class FakeCogneeRuntime:
         return DatasetHandle(
             name=name,
             tenant=tenant,
+            identity_scope=self._identity_scope,
             dataset_id=dataset.dataset_id if dataset is not None else None,
         )
 
     async def add_documents(
         self, handle: DatasetHandle, payloads: Sequence[DocumentPayload]
     ) -> DatasetHandle:
+        self._validate_handle(handle)
         if not payloads:
             return handle
         await _yield_point()
@@ -205,11 +219,17 @@ class FakeCogneeRuntime:
                 applied.append(str(payload.data_id))
         finally:
             self.calls.append(("add_documents", handle.name, tuple(applied)))
-        return DatasetHandle(name=handle.name, tenant=handle.tenant, dataset_id=dataset.dataset_id)
+        return DatasetHandle(
+            name=handle.name,
+            tenant=handle.tenant,
+            identity_scope=handle.identity_scope,
+            dataset_id=dataset.dataset_id,
+        )
 
     async def purge_document_memory(
         self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]
     ) -> None:
+        self._validate_handle(handle)
         await _yield_point()
         self.calls.append(("purge_document_memory", handle.name, tuple(str(d) for d in data_ids)))
         self._fire("purge_document_memory")
@@ -225,6 +245,7 @@ class FakeCogneeRuntime:
             document.cognify_complete = False
 
     async def delete_documents(self, handle: DatasetHandle, data_ids: Sequence[uuid.UUID]) -> None:
+        self._validate_handle(handle)
         await _yield_point()
         self.calls.append(("delete_documents", handle.name, tuple(str(d) for d in data_ids)))
         fault = self._next_fault("delete_documents")
@@ -249,6 +270,7 @@ class FakeCogneeRuntime:
             dataset.documents.pop(data_id, None)
 
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
+        self._validate_handle(handle)
         await _yield_point()
         self.calls.append(("cognify_dataset", handle.name, ()))
         self._fire("cognify_dataset")
@@ -267,6 +289,7 @@ class FakeCogneeRuntime:
             document.cognify_complete = True
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
+        self._validate_handle(handle)
         await _yield_point()
         self.calls.append(("teardown_dataset", handle.name, ()))
         self._fire("teardown_dataset")
@@ -276,6 +299,7 @@ class FakeCogneeRuntime:
         self.datasets.pop((handle.tenant, handle.name), None)
 
     async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
+        self._validate_handle(handle)
         await _yield_point()
         dataset = self.datasets.get((handle.tenant, handle.name))
         if dataset is None:
@@ -327,6 +351,7 @@ class FakeCogneeRuntime:
     # -- internals ----------------------------------------------------------
 
     def _ensure_dataset(self, handle: DatasetHandle) -> FakeDataset:
+        self._validate_handle(handle)
         key = (handle.tenant, handle.name)
         dataset = self.datasets.get(key)
         if dataset is None:
@@ -364,11 +389,21 @@ class FakeCogneeRuntime:
 
     @asynccontextmanager
     async def _locked(self, handle: DatasetHandle) -> AsyncIterator[None]:
+        self._validate_handle(handle)
         self._fire("dataset_lock")
-        scope = canonical_join("cogindex", handle.tenant, handle.name)
+        scope = canonical_join(
+            "cogindex",
+            handle.identity_scope,
+            handle.tenant,
+            handle.name,
+        )
         async with self._lock_provider.lock(scope):
             self.calls.append(("lock_acquire", handle.name, ()))
             try:
                 yield
             finally:
                 self.calls.append(("lock_release", handle.name, ()))
+
+    def _validate_handle(self, handle: DatasetHandle) -> None:
+        if handle.identity_scope != self._identity_scope:
+            raise ValueError("dataset handle identity_scope does not match this fake runtime")

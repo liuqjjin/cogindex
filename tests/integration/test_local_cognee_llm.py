@@ -33,8 +33,14 @@ TENANT = "default"
 DATASET = "llm_e2e"
 
 
-def did(key: str) -> uuid.UUID:
-    return cogindex.document_data_id(RUNTIME_KEY_NAME, TENANT, DATASET, key)
+def did(handle: DatasetHandle, key: str) -> uuid.UUID:
+    return cogindex.document_data_id(
+        RUNTIME_KEY_NAME,
+        handle.identity_scope,
+        TENANT,
+        DATASET,
+        key,
+    )
 
 
 @pytest.fixture
@@ -57,11 +63,12 @@ async def runtime(
 async def test_full_pipeline_with_real_llm(runtime: LocalCogneeRuntime) -> None:
     import cognee
 
+    handle = await runtime.resolve_dataset(DATASET, TENANT)
     handle = await runtime.add_documents(
-        DatasetHandle(name=DATASET, tenant=TENANT),
+        handle,
         [
             DocumentPayload(
-                data_id=did("solar.md"),
+                data_id=did(handle, "solar.md"),
                 content=(
                     "The Sun is the star at the center of the Solar System. "
                     "Earth orbits the Sun once per year."

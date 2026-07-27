@@ -4,6 +4,7 @@ from __future__ import annotations
 
 __all__ = [
     "CogindexError",
+    "CogneePipelineError",
     "CompatibilityError",
     "LockTimeoutError",
 ]
@@ -11,6 +12,10 @@ __all__ = [
 
 class CogindexError(Exception):
     """Base class for all cogindex errors."""
+
+
+class CogneePipelineError(CogindexError, RuntimeError):
+    """A Cognee pipeline reported errored runs instead of raising."""
 
 
 class CompatibilityError(CogindexError):

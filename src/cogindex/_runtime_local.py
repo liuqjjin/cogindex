@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from . import _compat
+from ._errors import CogneePipelineError
 from ._identity import canonical_join
 from ._locks import InProcessLockProvider, LockProvider
 from ._runtime import DatasetHandle, DocumentPayload, StoredDocument
@@ -29,6 +30,8 @@ __all__ = ["CogneePipelineError", "LocalCogneeRuntime"]
 logger = logging.getLogger("cogindex.runtime")
 
 _LOCK_SCOPE_PREFIX = "cogindex"
+_PHYSICAL_SCOPE_VERSION = "cognee-user-tenant-v1"
+_NO_ACTIVE_TENANT = "none"
 _SUPPORTED_TENANT = "default"
 _UPLOAD_MEMORY_LIMIT = 8 * 1024 * 1024
 
@@ -46,16 +49,17 @@ class LocalCogneeRuntime:
         user: cognee User to act as; None means cognee's default user.
 
     This runtime accepts only the ``"default"`` connector tenant. Physical
-    Cognee tenancy comes from ``user``; accepting additional logical tenant
-    names would let two connector identities address the same physical
-    dataset without sharing ownership or lock scope.
+    Cognee tenancy comes from the acting user's id and active ``tenant_id``;
+    accepting additional logical tenant names would let two connector
+    identities address the same physical dataset without sharing ownership
+    or lock scope.
     """
 
     __slots__ = (
         "__weakref__",
         "_data_root",
-        "_default_user_id",
         "_lock_provider",
+        "_resolved_identity_scope",
         "_setup_done",
         "_system_root",
         "_user",
@@ -74,7 +78,7 @@ class LocalCogneeRuntime:
         self._data_root, self._system_root = normalized_roots
         self._user = user
         self._setup_done = False
-        self._default_user_id: uuid.UUID | None = None
+        self._resolved_identity_scope: str | None = None
         global _DEFAULT_LOCAL_LOCK_PROVIDER
         with _LOCAL_RUNTIME_CONFIG_LOCK:
             live_runtimes = list(_LIVE_LOCAL_RUNTIMES)
@@ -118,24 +122,53 @@ class LocalCogneeRuntime:
         _validate_dataset_name(name)
         _validate_tenant(tenant)
         await self._ensure_ready()
+        user = await self._resolve_acting_user()
+        identity_scope = _physical_identity_scope(user)
+        self._bind_runtime_scope(identity_scope)
+        return await self._resolve_dataset_for_user(
+            name,
+            tenant,
+            user=user,
+            identity_scope=identity_scope,
+        )
+
+    async def _resolve_dataset_for_user(
+        self,
+        name: str,
+        tenant: str,
+        *,
+        user: Any,
+        identity_scope: str,
+    ) -> DatasetHandle:
         compat_info = _compat.load()
-        user_id = await self._resolve_user_id()
-        if user_id is None:
-            raise RuntimeError("cannot resolve the acting Cognee user's id")
-        datasets = await compat_info.cognee.datasets.list_datasets(user=self._user)
+        user_id, active_tenant_id = _user_coordinates(user)
+        datasets = await compat_info.cognee.datasets.list_datasets(user=user)
         owned_matches = [
             dataset
             for dataset in datasets
-            if dataset.name == name and getattr(dataset, "owner_id", None) == user_id
+            if dataset.name == name
+            and getattr(dataset, "owner_id", None) == user_id
+            and _dataset_tenant_id(dataset) == active_tenant_id
         ]
         if len(owned_matches) > 1:
             match_ids = sorted(str(dataset.id) for dataset in owned_matches)
             raise RuntimeError(
-                f"multiple Cognee datasets named {name!r} are owned by the acting user: {match_ids}"
+                f"multiple Cognee datasets named {name!r} are owned by the "
+                f"acting user in its active tenant: {match_ids}"
             )
         if owned_matches:
-            return DatasetHandle(name=name, tenant=tenant, dataset_id=owned_matches[0].id)
-        return DatasetHandle(name=name, tenant=tenant, dataset_id=None)
+            return DatasetHandle(
+                name=name,
+                tenant=tenant,
+                identity_scope=identity_scope,
+                dataset_id=owned_matches[0].id,
+            )
+        return DatasetHandle(
+            name=name,
+            tenant=tenant,
+            identity_scope=identity_scope,
+            dataset_id=None,
+        )
 
     async def add_documents(
         self, handle: DatasetHandle, payloads: Sequence[DocumentPayload]
@@ -144,6 +177,7 @@ class LocalCogneeRuntime:
         if not payloads:
             return handle
         await self._ensure_ready()
+        user = await self._bind_user(handle)
         compat_info = _compat.load()
         # node_set and importance_weight are add()-call-level parameters in
         # cognee (not DataItem fields), so payloads are grouped by them.
@@ -192,13 +226,22 @@ class LocalCogneeRuntime:
                     kwargs["importance_weight"] = importance_weight
                 if handle.dataset_id is not None:
                     kwargs["dataset_id"] = handle.dataset_id
-                if self._user is not None:
-                    kwargs["user"] = self._user
+                kwargs["user"] = user
+                _compat.validate_embedding_dimensions()
                 result = await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
                 _raise_on_errored_runs(result, op="add", dataset=handle.name)
+                # Cognee may discover a different vector width while opening
+                # the embedding connection. Refuse to let that silent rewrite
+                # turn the declaration-time fingerprint into a false success.
+                _compat.validate_embedding_dimensions()
         if handle.dataset_id is None:
             # The dataset materialized on first add; learn its id.
-            handle = await self.resolve_dataset(handle.name, handle.tenant)
+            handle = await self._resolve_dataset_for_user(
+                handle.name,
+                handle.tenant,
+                user=user,
+                identity_scope=handle.identity_scope,
+            )
         return handle
 
     async def purge_document_memory(
@@ -212,7 +255,8 @@ class LocalCogneeRuntime:
     async def cognify_dataset(self, handle: DatasetHandle, profile: CognifyProfile) -> None:
         self._validate_handle(handle)
         await self._ensure_ready()
-        handle = await self._ensure_resolved(handle)
+        user = await self._bind_user(handle)
+        handle = await self._ensure_resolved(handle, user)
         if handle.dataset_id is None:
             # Nothing was ever ingested; cognify would fail on a missing
             # dataset and there are no derivatives to build.
@@ -229,15 +273,17 @@ class LocalCogneeRuntime:
             kwargs["custom_prompt"] = profile.custom_prompt
         if profile.temporal_cognify:
             kwargs["temporal_cognify"] = True
-        if self._user is not None:
-            kwargs["user"] = self._user
+        kwargs["user"] = user
+        _compat.validate_embedding_dimensions()
         result = await compat_info.cognee.cognify(datasets=[handle.dataset_id], **kwargs)
         _raise_on_errored_runs(result, op="cognify", dataset=handle.name)
+        _compat.validate_embedding_dimensions()
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
         self._validate_handle(handle)
         await self._ensure_ready()
-        handle = await self._ensure_resolved(handle)
+        user = await self._bind_user(handle)
+        handle = await self._ensure_resolved(handle, user)
         if handle.dataset_id is None:
             return
         compat_info = _compat.load()
@@ -245,7 +291,7 @@ class LocalCogneeRuntime:
             # Hard dataset forget removes raw data, graph, vectors and the
             # dataset row itself. A stale handle is therefore invalid after
             # this call; callers must resolve by name again if they need it.
-            await compat_info.cognee.forget(dataset_id=handle.dataset_id, user=self._user)
+            await compat_info.cognee.forget(dataset_id=handle.dataset_id, user=user)
         except compat_info.dataset_missing_errors as exc:
             logger.info(
                 "teardown_dataset: dataset %s already absent (%s)",
@@ -256,11 +302,12 @@ class LocalCogneeRuntime:
     async def list_documents(self, handle: DatasetHandle) -> list[StoredDocument]:
         self._validate_handle(handle)
         await self._ensure_ready()
-        handle = await self._ensure_resolved(handle)
+        user = await self._bind_user(handle)
+        handle = await self._ensure_resolved(handle, user)
         if handle.dataset_id is None:
             return []
         compat_info = _compat.load()
-        rows = await compat_info.cognee.datasets.list_data(handle.dataset_id, user=self._user)
+        rows = await compat_info.cognee.datasets.list_data(handle.dataset_id, user=user)
         documents: list[StoredDocument] = []
         dataset_id_str = str(handle.dataset_id)
         for row in rows:
@@ -283,7 +330,12 @@ class LocalCogneeRuntime:
     def dataset_lock(self, handle: DatasetHandle) -> AbstractAsyncContextManager[None]:
         self._validate_handle(handle)
         return self._lock_provider.lock(
-            canonical_join(_LOCK_SCOPE_PREFIX, handle.tenant, handle.name)
+            canonical_join(
+                _LOCK_SCOPE_PREFIX,
+                handle.identity_scope,
+                handle.tenant,
+                handle.name,
+            )
         )
 
     async def _forget_documents(
@@ -293,7 +345,8 @@ class LocalCogneeRuntime:
         if not data_ids:
             return
         await self._ensure_ready()
-        handle = await self._ensure_resolved(handle)
+        user = await self._bind_user(handle)
+        handle = await self._ensure_resolved(handle, user)
         if handle.dataset_id is None:
             # Dataset never materialized: nothing to purge or delete.
             return
@@ -305,16 +358,15 @@ class LocalCogneeRuntime:
         # is deliberate: running these concurrently is measurably faster and
         # measurably wrong, because the provenance planner's shared-node
         # cleanup races and leaves orphaned type nodes behind.
-        async with _compat.dataset_database_context(
-            handle.dataset_id, await self._resolve_user_id()
-        ):
+        user_id, _ = _user_coordinates(user)
+        async with _compat.dataset_database_context(handle.dataset_id, user_id):
             for data_id in data_ids:
                 try:
                     await compat_info.cognee.forget(
                         data_id=data_id,
                         dataset_id=handle.dataset_id,
                         memory_only=memory_only,
-                        user=self._user,
+                        user=user,
                     )
                 except compat_info.dataset_missing_errors as exc:
                     # forget() on a missing data_id in an existing dataset
@@ -334,20 +386,50 @@ class LocalCogneeRuntime:
                         exc,
                     )
 
-    async def _resolve_user_id(self) -> uuid.UUID | None:
-        """Id of the acting user, resolved once and cached."""
-        if self._user is not None:
-            user_id = getattr(self._user, "id", None)
-            return user_id if isinstance(user_id, uuid.UUID) else None
-        if self._default_user_id is None:
-            self._default_user_id = await _compat.default_user_id()
-        return self._default_user_id
+    async def _resolve_acting_user(self) -> Any:
+        if self._user is None:
+            user = await _compat.resolve_default_user()
+        else:
+            configured_user_id, configured_tenant_id = _user_coordinates(self._user)
+            user = await _compat.resolve_user(configured_user_id)
+            if _user_coordinates(user) != (configured_user_id, configured_tenant_id):
+                raise RuntimeError(
+                    "the configured Cognee user's active tenant changed; "
+                    "construct a new LocalCogneeRuntime with a freshly resolved User"
+                )
+        _user_coordinates(user)
+        return user
 
-    async def _ensure_resolved(self, handle: DatasetHandle) -> DatasetHandle:
+    async def _bind_user(self, handle: DatasetHandle) -> Any:
+        user = await self._resolve_acting_user()
+        identity_scope = _physical_identity_scope(user)
+        self._bind_runtime_scope(identity_scope)
+        if identity_scope != handle.identity_scope:
+            raise RuntimeError(
+                "the acting Cognee user or active tenant changed after dataset "
+                "resolution; no SDK operation was attempted"
+            )
+        return user
+
+    async def _ensure_resolved(self, handle: DatasetHandle, user: Any) -> DatasetHandle:
         self._validate_handle(handle)
         if handle.dataset_id is not None:
             return handle
-        return await self.resolve_dataset(handle.name, handle.tenant)
+        return await self._resolve_dataset_for_user(
+            handle.name,
+            handle.tenant,
+            user=user,
+            identity_scope=handle.identity_scope,
+        )
+
+    def _bind_runtime_scope(self, identity_scope: str) -> None:
+        if self._resolved_identity_scope is None:
+            self._resolved_identity_scope = identity_scope
+        elif self._resolved_identity_scope != identity_scope:
+            raise RuntimeError(
+                "the acting Cognee user or active tenant changed after this "
+                "runtime first resolved a dataset"
+            )
 
     @property
     def _storage_roots(self) -> tuple[str, str]:
@@ -365,7 +447,43 @@ class LocalCogneeRuntime:
     def _validate_handle(self, handle: DatasetHandle) -> None:
         _validate_dataset_name(handle.name)
         _validate_tenant(handle.tenant)
+        if self._resolved_identity_scope is None:
+            raise RuntimeError("dataset handle must come from resolve_dataset() on this runtime")
+        if handle.identity_scope != self._resolved_identity_scope:
+            raise ValueError("dataset handle identity_scope does not match this LocalCogneeRuntime")
         self._assert_storage_roots()
+
+
+def _user_coordinates(user: Any) -> tuple[uuid.UUID, uuid.UUID | None]:
+    user_id = getattr(user, "id", None)
+    if not isinstance(user_id, uuid.UUID):
+        raise RuntimeError("the acting Cognee User has no UUID id")
+    missing = object()
+    tenant_id = getattr(user, "tenant_id", missing)
+    if tenant_id is missing:
+        raise RuntimeError("the acting Cognee User has no tenant_id attribute")
+    if tenant_id is not None and not isinstance(tenant_id, uuid.UUID):
+        raise RuntimeError("the acting Cognee User tenant_id is neither UUID nor None")
+    return user_id, tenant_id
+
+
+def _physical_identity_scope(user: Any) -> str:
+    user_id, tenant_id = _user_coordinates(user)
+    return canonical_join(
+        _PHYSICAL_SCOPE_VERSION,
+        str(user_id),
+        _NO_ACTIVE_TENANT if tenant_id is None else str(tenant_id),
+    )
+
+
+def _dataset_tenant_id(dataset: Any) -> uuid.UUID | None:
+    missing = object()
+    tenant_id = getattr(dataset, "tenant_id", missing)
+    if tenant_id is missing:
+        raise RuntimeError("Cognee returned a Dataset without tenant_id")
+    if tenant_id is not None and not isinstance(tenant_id, uuid.UUID):
+        raise RuntimeError("Cognee returned a Dataset with an invalid tenant_id")
+    return tenant_id
 
 
 _LIVE_LOCAL_RUNTIMES: weakref.WeakSet[LocalCogneeRuntime] = weakref.WeakSet()
@@ -431,10 +549,6 @@ def _validate_dataset_name(name: str) -> None:
         raise ValueError("dataset name must be non-empty")
     if "\x00" in name:
         raise ValueError("dataset name must not contain NUL characters")
-
-
-class CogneePipelineError(RuntimeError):
-    """A cognee pipeline reported errored runs instead of raising."""
 
 
 def _raise_on_errored_runs(result: Any, *, op: str, dataset: str) -> None:

@@ -12,6 +12,7 @@ from ._harness import BenchResult, percentile
 
 def _payloads(
     runtime_key: str,
+    identity_scope: str,
     dataset: str,
     docs: dict[str, str],
     *,
@@ -19,7 +20,13 @@ def _payloads(
 ) -> list[cogindex.DocumentPayload]:
     return [
         cogindex.DocumentPayload(
-            data_id=cogindex.document_data_id(runtime_key, tenant, dataset, key),
+            data_id=cogindex.document_data_id(
+                runtime_key,
+                identity_scope,
+                tenant,
+                dataset,
+                key,
+            ),
             content=content,
         )
         for key, content in docs.items()
@@ -38,7 +45,13 @@ async def _initial_full_load(
     async with runtime.dataset_lock(handle):
         handle = await runtime.add_documents(
             handle,
-            _payloads(runtime_key, dataset, docs, tenant=tenant),
+            _payloads(
+                runtime_key,
+                handle.identity_scope,
+                dataset,
+                docs,
+                tenant=tenant,
+            ),
         )
         await runtime.cognify_dataset(handle, cogindex.CognifyProfile())
 
@@ -59,7 +72,13 @@ async def _full_rebuild(
         handle = await runtime.resolve_dataset(dataset, tenant)
         handle = await runtime.add_documents(
             handle,
-            _payloads(runtime_key, dataset, docs, tenant=tenant),
+            _payloads(
+                runtime_key,
+                handle.identity_scope,
+                dataset,
+                docs,
+                tenant=tenant,
+            ),
         )
         await runtime.cognify_dataset(handle, cogindex.CognifyProfile())
     return time.perf_counter() - started

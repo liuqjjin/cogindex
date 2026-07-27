@@ -84,7 +84,9 @@ sequenceDiagram
 
 - 固定的 cogindex namespace 和身份版本；
 - runtime 的 `ContextKey` 名称；
-- tenant；
+- runtime 解析出的物理身份范围；本地实现使用 Cognee 用户 UUID 与当前
+  `tenant_id`（无 active tenant 时显式记录 `None`）；
+- connector tenant；
 - 数据集名称；
 - 调用方提供的文档稳定标识。
 
@@ -107,9 +109,13 @@ sequenceDiagram
 | 仅标签变化且上次状态已确认 | 重新写入标签，不重复抽取 | 标签不影响图和向量 |
 | 文档不再声明 | 硬删除 | 清理原文及不再被其他文档引用的数据 |
 
-处理配置的指纹包含图模型及其 schema、抽取提示词、分块器和块大小、LLM、嵌入模型及
-向量维度。连接地址、密钥、锁配置和日志级别不会进入指纹，也不会因为运维配置变化而
-重建知识图谱。
+处理配置的指纹包含图模型及其 schema、自定义或实际使用的内置提示词、分块器和块大小；
+还包含 Cognee 的基础/抽取/摘要模型配置、嵌入模型与维度、分类和摘要 schema、ontology
+内容等运行时输入。tracking store 只保存这些输入的摘要，不保存提示词、文件路径或原始
+配置。连接地址、密钥、批量/限流、锁配置和日志级别不进入指纹。
+
+自定义分块器或图模型如果只改了 Python 实现、类名和 schema 都没变，调用方需要在
+`ProcessingConfig.extras` 中递增实现版本；项目不使用不稳定的源码文本作为版本号。
 
 ## 失败和重试
 
@@ -128,8 +134,9 @@ sink 成功后才允许 CocoIndex 提交新的跟踪记录；如果进程在外�
 3. 不存在绕过 cogindex 的并发写入；
 4. 后续至少有一次同步成功完成。
 
-满足这些条件后，多次重试会得到相同的当前文档集合。`verify_dataset()` 可检查原文是否
-存在、身份、处理完成状态和标签，但目前看不到图或向量是否仍对应当前正文。
+满足这些条件后，后续成功同步会得到相同的当前文档集合，并重新执行已知处于不确定状态
+的派生处理。`verify_dataset()` 可检查原文是否存在、身份、处理完成状态和标签，但目前
+看不到图或向量是否仍对应当前正文。
 
 ## 并发
 
@@ -143,11 +150,13 @@ PostgreSQL 数据库作为锁服务。锁只约束通过 cogindex 发起的操�
 
 ## Agent 和 RAG 场景
 
-这类同步对长时间运行的 Agent 有三个直接用途：
+对长时间运行的 Agent / RAG 系统，cogindex 负责的是知识存储的更新边界：
 
-- 产品规则或内部制度修改后，下一次检索只看到当前版本；
-- 运维手册、服务目录发生变化后，Agent 不会继续引用已经删除的路径或服务；
-- 数据源移除文档后，对应原文以及失去最后引用的图和向量数据一起清理。
+- 文档更新后，清理这份文档旧版本产生的图和向量，再写入并处理新内容；
+- 文档删除后，清理其原文及不再被其他文档引用的派生数据。
+
+检索缓存、排序和回答生成不在本项目内，因此同步成功不等于保证一次检索或回答只含新
+信息。
 
 [`examples/agent_memory_demo.py`](../examples/agent_memory_demo.py) 用一个图查询工具演示
 第一种情况：`ProjectAtlas` 的路由从 `BlueQueue` 改成 `GreenQueue`，再次提问得到新队列，
@@ -159,7 +168,11 @@ PostgreSQL 数据库作为锁服务。锁只约束通过 cogindex 发起的操�
 - Cognee REST `add` 不能接收调用方提供的 `data_id`，所以当前只支持本地 Python SDK。
 - `cognee.serve()` 会把顶层操作切到 REST；本地 runtime 会拒绝这种状态，调用方需要先
   执行 `await cognee.disconnect()`。
-- `LocalCogneeRuntime` 只支持 `tenant="default"`，实际访问范围由 Cognee user 决定。
+- `LocalCogneeRuntime` 只支持 `tenant="default"`，实际访问范围由 Cognee user id 和
+  active tenant 共同决定。同步进行时不能切换该用户的 active tenant。
+- 同一个 runtime `ContextKey` 必须始终绑定同一组 Cognee user id 与 active tenant。运行时
+  实例只能检测本次进程内的改绑；跨运行改绑后，同步或卸载可能操作新范围里的同名数据集。
+  如需切换，先用旧绑定清理或核对旧范围，再为新范围使用新的 `ContextKey`。
 - 系统管理的 target 卸载时会删除整个数据集；`managed_by="user"` 只跳过这次整库清理。
 - Cognee 在整库清理中不会向上抛出个别原文删除失败，极端情况下可能留下无法由 SDK 结果
   检出的孤立原文记录。
