@@ -217,6 +217,7 @@ async def test_lock_timeout_raises_lock_timeout_error() -> None:
             pass
     release.set()
     await asyncio.wait_for(task, timeout=5)
+    assert provider._locks == {}
 
 
 async def test_lock_distinct_scopes_do_not_block_each_other() -> None:
@@ -236,6 +237,7 @@ async def test_lock_distinct_scopes_do_not_block_each_other() -> None:
             b_inside.set()
 
     await asyncio.wait_for(asyncio.gather(hold_a(), hold_b()), timeout=5)
+    assert provider._locks == {}
 
 
 # =============================================================================

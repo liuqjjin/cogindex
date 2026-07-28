@@ -1,11 +1,10 @@
 """Integration-test environment setup.
 
-These assignments must run before cognee is imported anywhere in the
-process:
+These assignments run before cognee is imported anywhere in the process:
 
-- ``MOCK_EMBEDDING`` is cognee's own deterministic-embedding switch (every
-  embedding engine checks it at call time), the officially supported way
-  its test suite runs the full pipeline without an embedding provider.
+- ``MOCK_EMBEDDING`` is enabled for the deterministic integration tier and
+  removed when ``COGINDEX_RUN_LLM_TESTS=1`` selects the opt-in real-provider
+  tier. The two modes must not silently share one setting.
 - ``TELEMETRY_DISABLED`` keeps the integration tier network-free.
 
 The LLM itself is patched per-test via
@@ -18,4 +17,7 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("TELEMETRY_DISABLED", "1")
-os.environ.setdefault("MOCK_EMBEDDING", "true")
+if os.environ.get("COGINDEX_RUN_LLM_TESTS") == "1":
+    os.environ.pop("MOCK_EMBEDDING", None)
+else:
+    os.environ["MOCK_EMBEDDING"] = "true"

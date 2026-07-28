@@ -115,6 +115,7 @@ def fingerprint_json(obj: Any) -> str:
     Raises TypeError if ``obj`` is not JSON-serializable; callers surface
     that at declaration time, before anything reaches the engine.
     """
+    _validate_json_object_keys(obj)
     canonical = json.dumps(
         obj,
         sort_keys=True,
@@ -125,6 +126,18 @@ def fingerprint_json(obj: Any) -> str:
     return hashlib.blake2b(
         canonical.encode("utf-8"), digest_size=_FINGERPRINT_DIGEST_SIZE
     ).hexdigest()
+
+
+def _validate_json_object_keys(value: Any) -> None:
+    """Reject mapping keys that JSON would silently coerce to strings."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings")
+            _validate_json_object_keys(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_json_object_keys(item)
 
 
 def fingerprint_content(content: str | bytes) -> str:

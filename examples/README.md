@@ -7,6 +7,9 @@ LLM 和嵌入替身；另外两个示例默认使用相同的替身。该模式�
 `quickstart_live.py` 时省略 `--deterministic`，运行
 `shared_entity_demo.py` 时添加 `--real`。
 
+`quickstart_live.py` 会给确定性替身单独记录处理版本。以后在同一 storage 上切换到真实
+模型时，处理指纹会变化并重新生成图和向量，不会把替身输出误认为真实模型的当前结果。
+
 以下命令均从仓库根目录运行。
 
 ## quickstart_live.py：文件夹 → 知识图谱

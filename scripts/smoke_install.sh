@@ -1,25 +1,52 @@
 #!/usr/bin/env bash
-# Build the wheel and verify the current version installs in a clean venv.
+# Verify built package artifacts install and import in clean virtual environments.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SMOKE_DIR="$(mktemp -d)"
 trap 'rm -rf "$SMOKE_DIR"' EXIT
 
-uv build --wheel --out-dir "$SMOKE_DIR/dist"
-uv venv "$SMOKE_DIR/venv" --python 3.12
-shopt -s nullglob
-WHEELS=("$SMOKE_DIR"/dist/cogindex-*.whl)
-if [[ "${#WHEELS[@]}" -ne 1 || ! -f "${WHEELS[0]}" ]]; then
-  echo "expected exactly one cogindex wheel, found ${#WHEELS[@]}" >&2
+if [[ "$#" -eq 0 ]]; then
+  uv build --wheel --out-dir "$SMOKE_DIR/dist"
+  shopt -s nullglob
+  ARTIFACTS=("$SMOKE_DIR"/dist/cogindex-*.whl)
+else
+  ARTIFACTS=("$@")
+fi
+
+if [[ "${#ARTIFACTS[@]}" -eq 0 ]]; then
+  echo "expected at least one cogindex package artifact" >&2
   exit 1
 fi
-WHEEL="${WHEELS[0]}"
-uv pip install --python "$SMOKE_DIR/venv/bin/python" "$WHEEL"
+
 EXPECTED_VERSION="$(uv run python -c \
   'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
 export EXPECTED_VERSION
-"$SMOKE_DIR/venv/bin/python" - <<'EOF'
+
+for index in "${!ARTIFACTS[@]}"; do
+  artifact="${ARTIFACTS[$index]}"
+  if [[ ! -f "$artifact" ]]; then
+    echo "package artifact not found: $artifact" >&2
+    exit 1
+  fi
+  case "$(basename "$artifact")" in
+    cogindex-*.whl|cogindex-*.tar.gz) ;;
+    *)
+      echo "unexpected package artifact: $artifact" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ "$artifact" == *.tar.gz ]] && tar -tzf "$artifact" | grep -E \
+    '/(\.git|\.upstream|\.venv|dist)/' >/dev/null; then
+    echo "source archive contains local or generated repository state: $artifact" >&2
+    exit 1
+  fi
+
+  venv="$SMOKE_DIR/venv-$index"
+  uv venv "$venv" --python 3.12
+  uv pip install --python "$venv/bin/python" "$artifact"
+  "$venv/bin/python" - <<'EOF'
 import os
 from importlib.metadata import version
 
@@ -30,3 +57,4 @@ assert cogindex.__version__ == expected
 assert version("cogindex") == expected
 print("cogindex", expected, "imported OK from clean venv")
 EOF
+done

@@ -25,10 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hard full rebuild and a fixed, disjoint edit/delete set. It records three
   timing samples, observed write counts, stored-document checks and real graph
   stale/missing-entity checks; the fake smoke profile now runs in CI.
-- Added a runnable Agent-memory example that reads a real relationship from
-  the local Cognee graph before and after a document replacement, then asserts
-  that the new fact is present and the old entity is gone.
-- Added a Chinese design overview covering the Agent/RAG boundary, data flow,
+- Added a runnable downstream-query example that reads a real relationship
+  from the local Cognee graph before and after a document replacement, then
+  asserts that the new fact is present and the old entity is gone.
+- Added a Chinese design overview covering the read-side boundary, data flow,
   identity, replacement order, failure recovery, locking and known limits.
 - Pass literal `str` and `bytes` document content to Cognee as explicit upload
   streams. A string that happens to look like a local path or URL can no longer
@@ -83,8 +83,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uv.lock` and pre-commit hooks, keep dependency auditing blocking except for
   the documented unpatched `diskcache` advisory, and strengthen the
   clean-wheel smoke test.
-- Rewrote the primary README in Chinese and removed claims not supported by
-  the current tests or benchmark evidence.
+- Reorganized the primary README around knowledge-state consistency, moved
+  installation and the minimal integration ahead of implementation details,
+  and removed claims not supported by tests or benchmark evidence.
+
+### Fixed
+
+- Keep the opt-in real-provider integration tier on real embeddings instead
+  of inheriting the deterministic tier's process-wide mock switch.
+- Apply credential and transport filtering to camelCase model arguments as
+  well as snake_case names.
+- Reject non-string JSON object keys before fingerprinting so Python values
+  that JSON would coerce to the same key cannot share a tracking fingerprint.
+- Reclaim unused in-process dataset lock entries after the final holder or
+  waiter exits.
+- Align doctor credential checks with Cognee's case-sensitive provider and
+  API-key rules, validate embedding dimensions, and fail health checks when
+  storage roots cannot be inspected.
+- Require explicit terminal success for every pipeline write, reject partial
+  add results and wrong-dataset cognify results, and fail if a first add does
+  not materialize its dataset.
+- Read verification state under the dataset lock and re-resolve after waiting,
+  avoiding reports from a write or teardown's intermediate state.
+- Reject graph model and non-empty custom prompt settings that Cognee ignores
+  in temporal mode.
+- Let user-managed target removal commit after its unused runtime binding has
+  already been removed.
+- Make deterministic examples override a false inherited mock switch; give
+  persistent quickstart substitute output a distinct processing revision and
+  return a failing exit code when environment checks fail.
+- Build source archives from an explicit path allowlist, excluding local
+  upstream audit clones, and smoke-test the exact wheel and source archive
+  that CI uploads or release automation publishes.
 
 ## [0.1.0] - 2026-07-25
 

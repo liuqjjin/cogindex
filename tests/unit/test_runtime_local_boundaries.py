@@ -19,8 +19,12 @@ import cogindex._runtime_local as runtime_module
 from cogindex import CompatibilityError
 from cogindex._identity import canonical_join, document_data_id
 from cogindex._runtime import DatasetHandle, DocumentPayload
-from cogindex._runtime_local import LocalCogneeRuntime
+from cogindex._runtime_local import CogneePipelineError, LocalCogneeRuntime
 from cogindex._spec import CognifyProfile
+
+
+class PipelineRunCompleted(SimpleNamespace):
+    pass
 
 
 class _CompatHarness:
@@ -36,8 +40,44 @@ class _CompatHarness:
         )
         self.list_datasets = AsyncMock(return_value=[])
         self.list_data = AsyncMock(return_value=[])
-        self.add = AsyncMock(return_value=SimpleNamespace(data_ingestion_info=[]))
-        self.cognify = AsyncMock(return_value={})
+
+        def add_result(items: list[Any], dataset_name: str, **kwargs: Any) -> Any:
+            dataset_id = kwargs.get("dataset_id", uuid.uuid4())
+            return PipelineRunCompleted(
+                dataset_id=dataset_id,
+                dataset_name=dataset_name,
+                data_ingestion_info=[
+                    {
+                        "run_info": PipelineRunCompleted(
+                            dataset_id=dataset_id,
+                            dataset_name=dataset_name,
+                        ),
+                        "data_id": item.data_id,
+                    }
+                    for item in items
+                ],
+            )
+
+        def cognify_result(datasets: list[uuid.UUID], **kwargs: Any) -> Any:
+            del kwargs
+            dataset_id = datasets[0]
+            return {
+                dataset_id: PipelineRunCompleted(
+                    dataset_id=dataset_id,
+                    dataset_name="docs",
+                    data_ingestion_info=[
+                        {
+                            "run_info": PipelineRunCompleted(
+                                dataset_id=dataset_id,
+                                dataset_name="docs",
+                            )
+                        }
+                    ],
+                )
+            }
+
+        self.add = AsyncMock(side_effect=add_result)
+        self.cognify = AsyncMock(side_effect=cognify_result)
         self.validate_embedding_dimensions = Mock(return_value=3072)
         self.compat = SimpleNamespace(
             remote_mode_check=lambda: self.remote_mode,
@@ -484,6 +524,13 @@ async def test_resolve_dataset_returns_missing_for_shared_only_same_name(
 
     assert handle.dataset_id is None
     assert handle.identity_scope == runtime_module._physical_identity_scope(user)
+    with pytest.raises(CogneePipelineError, match="without materializing"):
+        await runtime.add_documents(
+            handle,
+            [DocumentPayload(data_id=uuid.uuid4(), content="literal content")],
+        )
+    compat_harness.add.assert_awaited_once()
+    assert compat_harness.list_datasets.await_count == 2
 
 
 async def test_resolve_dataset_rejects_duplicate_owned_same_name(

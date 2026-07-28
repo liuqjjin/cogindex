@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unicodedata
 import uuid
 from typing import Any
@@ -61,13 +62,22 @@ async def test_verify_ok_when_state_matches() -> None:
     runtime = FakeCogneeRuntime()
     await seed(runtime, [payload("a.md", "alpha", label="L"), payload("b.md", "beta")])
 
-    report = await verify_dataset(
-        runtime,
-        RUNTIME_KEY,
-        DATASET,
-        [ExpectedDocument("a.md", label="L"), ExpectedDocument("b.md")],
-        tenant=TENANT,
-    )
+    handle = await runtime.resolve_dataset(DATASET, TENANT)
+    async with runtime.dataset_lock(handle):
+        verification = asyncio.create_task(
+            verify_dataset(
+                runtime,
+                RUNTIME_KEY,
+                DATASET,
+                [ExpectedDocument("a.md", label="L"), ExpectedDocument("b.md")],
+                tenant=TENANT,
+            )
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not verification.done()
+
+    report = await verification
     assert report.ok
     assert report.checked == 2
     assert report.issues == ()
@@ -317,13 +327,16 @@ async def test_verify_render_lists_every_issue() -> None:
 # =============================================================================
 
 
-def test_doctor_runs_and_reports_installed_versions() -> None:
+def test_doctor_runs_and_reports_installed_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     report = doctor()
     assert report.findings
     checks = {finding.check for finding in report.findings}
     assert "cocoindex" in checks
     assert "cognee-compat" in checks
     assert "storage-roots" in checks
+    assert "embedding-dimensions" in checks
     # This dev environment has compatible versions installed.
     by_check = {finding.check: finding for finding in report.findings}
     assert by_check["cocoindex"].severity == "ok"
@@ -333,6 +346,15 @@ def test_doctor_runs_and_reports_installed_versions() -> None:
     rendered = report.render()
     assert "cogindex doctor" in rendered
     assert "cognee-compat" in rendered
+
+    def invalid_dimensions() -> int:
+        raise cogindex.CompatibilityError("unregistered embedding width")
+
+    monkeypatch.setattr(_compat, "validate_embedding_dimensions", invalid_dimensions)
+    invalid_report = doctor(check_credentials=False)
+    by_check = {finding.check: finding for finding in invalid_report.findings}
+    assert by_check["embedding-dimensions"].severity == "critical"
+    assert not invalid_report.ok
 
 
 def test_doctor_can_skip_credentials_for_deterministic_examples(
@@ -346,14 +368,39 @@ def test_doctor_can_skip_credentials_for_deterministic_examples(
     report = doctor(check_credentials=False)
 
     assert all(not finding.check.endswith("-credentials") for finding in report.findings)
+    monkeypatch.setattr(_compat, "storage_roots", lambda: (None, None))
+    unreadable = doctor(check_credentials=False)
+    storage = next(finding for finding in unreadable.findings if finding.check == "storage-roots")
+    assert storage.severity == "critical"
+    assert not unreadable.ok
 
 
 def test_missing_required_credentials_make_doctor_not_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(_compat, "credentials_present", lambda: (False, False))
+    from cognee.infrastructure.databases.vector.embeddings.config import (
+        get_embedding_config,
+    )
+    from cognee.infrastructure.llm.config import get_llm_config
+
+    llm = get_llm_config()
+    embedding = get_embedding_config()
+    monkeypatch.setattr(llm, "llm_provider", "llama_cpp")
+    monkeypatch.setattr(llm, "llm_api_key", None)
+    monkeypatch.setattr(llm, "llm_azure_use_managed_identity", False)
+    monkeypatch.setattr(embedding, "embedding_provider", "openai")
+    monkeypatch.setattr(embedding, "embedding_api_key", None)
+
+    assert _compat.credentials_present() == (True, False)
 
     findings = _doctor._check_credentials()
 
-    assert {finding.severity for finding in findings} == {"critical"}
+    assert [finding.severity for finding in findings] == ["ok", "critical"]
     assert not cogindex.DoctorReport(findings=tuple(findings)).ok
+
+    monkeypatch.setattr(llm, "llm_provider", "openai")
+    assert _compat.credentials_present() == (False, False)
+    assert {finding.severity for finding in _doctor._check_credentials()} == {"critical"}
+
+    monkeypatch.setattr(llm, "llm_provider", "OLLAMA")
+    assert _compat.credentials_present() == (None, False)

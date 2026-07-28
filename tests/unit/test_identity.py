@@ -165,9 +165,10 @@ class TestFingerprintJson:
         with pytest.raises(ValueError):
             fingerprint_json(float("nan"))
 
-    def test_set_value_raises_type_error(self) -> None:
-        with pytest.raises(TypeError):
-            fingerprint_json({"a": {1, 2}})
+    def test_noncanonical_values_raise_type_error(self) -> None:
+        for value in ({"a": {1, 2}}, {1: "integer key"}, {"a": {True: "boolean key"}}):
+            with pytest.raises(TypeError):
+                fingerprint_json(value)
 
     def test_value_change_changes_fingerprint(self) -> None:
         assert fingerprint_json({"a": 1, "b": 2}) != fingerprint_json({"a": 1, "b": 3})

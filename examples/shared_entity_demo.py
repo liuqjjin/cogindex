@@ -95,23 +95,15 @@ async def graph_entity_names(dataset_id: uuid.UUID) -> list[str]:
     return sorted(names)
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--real",
-        action="store_true",
-        help="use the configured real LLM instead of the deterministic substitute",
-    )
-    args = parser.parse_args()
-    if not args.real:
-        os.environ.setdefault("MOCK_EMBEDDING", "true")
-        os.environ.setdefault("TELEMETRY_DISABLED", "1")
+async def run_demo(storage: Path, *, real: bool) -> None:
+    if not real:
+        os.environ["MOCK_EMBEDDING"] = "true"
+        os.environ["TELEMETRY_DISABLED"] = "1"
 
     import cocoindex as coco
 
     import cogindex
 
-    storage = Path(tempfile.mkdtemp(prefix="cogindex-shared-entity-"))
     runtime = cogindex.LocalCogneeRuntime(
         data_root=storage / "data", system_root=storage / "system"
     )
@@ -143,7 +135,7 @@ async def main() -> None:
             print("   (no documents declared)")
         print(f"   graph entities: {names}")
 
-    mock_context = contextlib.nullcontext() if args.real else deterministic_llm()
+    mock_context = contextlib.nullcontext() if real else deterministic_llm()
     with mock_context:
         await sync_and_show(
             "step 1: both documents synced",
@@ -164,7 +156,19 @@ async def main() -> None:
             {"bob.md": "Bob works for BetaCorp."},
         )
 
-    print("\ndone: storage was", storage)
+
+async def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--real",
+        action="store_true",
+        help="use the configured real LLM instead of the deterministic substitute",
+    )
+    args = parser.parse_args()
+
+    with tempfile.TemporaryDirectory(prefix="cogindex-shared-entity-") as directory:
+        await run_demo(Path(directory), real=args.real)
+    print("\ndone: temporary storage removed")
 
 
 if __name__ == "__main__":

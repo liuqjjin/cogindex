@@ -225,9 +225,23 @@ def test_cognify_profile_rejects_invalid_chunk_size(chunk_size: Any) -> None:
         CognifyProfile(chunk_size=chunk_size)
 
 
-def test_processing_config_rejects_non_positive_chunk_size() -> None:
+def test_profiles_reject_invalid_or_ignored_processing_settings() -> None:
     with pytest.raises(ValueError, match="chunk_size"):
         ProcessingConfig(chunk_size=0)
+
+    class Graph:
+        pass
+
+    with pytest.raises(ValueError, match=r"graph_model.*temporal"):
+        CognifyProfile(graph_model=Graph, temporal_cognify=True)
+    with pytest.raises(ValueError, match=r"custom_prompt.*temporal"):
+        CognifyProfile(custom_prompt="extract events", temporal_cognify=True)
+
+    # Empty prompt has the same effective meaning as no prompt, including in
+    # the temporal pipeline.
+    assert processing_config_from_profile(
+        CognifyProfile(custom_prompt="", temporal_cognify=True)
+    ) == processing_config_from_profile(CognifyProfile(temporal_cognify=True))
 
 
 def test_processing_config_copies_normalizes_and_sorts_extras() -> None:
@@ -384,6 +398,12 @@ def test_derived_config_resolves_cognee_defaults_for_unset_fields() -> None:
     # A schema fingerprint means the graph model's shape is covered too, not
     # only its name.
     assert derived.graph_model_schema_fingerprint
+
+    temporal = processing_config_from_profile(CognifyProfile(temporal_cognify=True))
+    assert temporal.graph_model_id is None
+    assert temporal.graph_model_schema_fingerprint is None
+    assert temporal.custom_prompt_fingerprint is None
+    assert temporal.chunker_id is not None
 
 
 def test_derived_config_prefers_explicit_profile_values_over_defaults() -> None:
@@ -1272,6 +1292,9 @@ def test_missing_profile_type_default_fails_closed(
     )
     monkeypatch.setattr(_compat, "load", lambda: replacement)
 
+    if missing_default == "graph":
+        temporal = processing_config_from_profile(CognifyProfile(temporal_cognify=True))
+        assert temporal.graph_model_id is None
     with pytest.raises(CompatibilityError, match=missing_default):
         processing_config_from_profile(CognifyProfile())
 

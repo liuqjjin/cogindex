@@ -49,6 +49,11 @@ does not claim cross-system atomicity.
      (enforced and contract-tested in cogindex's runtime layer);
    - `cognify` skips items whose per-item pipeline status is completed, and
      re-processes items whose status was reset.
+4. A sink confirms success only from Cognee's explicit terminal result
+   (`PipelineRunCompleted` or `PipelineRunAlreadyCompleted`). Empty,
+   non-terminal, malformed and wrong-dataset results fail closed. For `add`,
+   every requested item must have a terminal result and a first write must
+   leave the dataset resolvable before tracking can be committed.
 
 ## Convergence argument
 
@@ -81,11 +86,13 @@ of every possible upstream or deployment failure.
 - A crash after `forget(memory_only=True)` but before re-add leaves the
   document temporarily absent from search until retry (at-least-once, not
   exactly-once).
-- `verify_dataset()` exists to detect residual drift (external mutation, operator
-  error) that the model cannot prevent, e.g. a human deleting Cognee data
-  behind the connector's back. It compares presence, identity, completion
-  and label, but **not** whether derivatives match current content, so stale or
-  absent derivatives under an otherwise healthy row are invisible to it.
+- `verify_dataset()` exists to detect residual drift (external mutation,
+  operator error) that the model cannot prevent, e.g. a human deleting Cognee
+  data behind the connector's back. It takes the dataset lock and re-resolves
+  the dataset before reading, so it does not report a normal cogindex write's
+  intermediate state. It compares presence, identity, completion and label,
+  but **not** whether derivatives match current content, so stale or absent
+  derivatives under an otherwise healthy row are invisible to it.
 - Losing the tracking store is outside the convergence argument: uncertainty
   the engine *records* is replayed conservatively, but uncertainty that is
   *erased* leaves documents looking brand new while Cognee still holds their

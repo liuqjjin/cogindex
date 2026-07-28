@@ -21,6 +21,7 @@ tier if run in-process.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,7 @@ def write_corpus(folder: Path, files: dict[str, str]) -> None:
         path.write_text(text)
 
 
-def run_quickstart(workdir: Path, folder_arg: str) -> str:
+def run_quickstart(workdir: Path, folder_arg: str, *extra_args: str) -> str:
     """Run the quickstart from ``workdir`` so relative paths stay relative."""
     result = subprocess.run(
         [
@@ -58,11 +59,13 @@ def run_quickstart(workdir: Path, folder_arg: str) -> str:
             "--deterministic",
             "--storage",
             "./storage",
+            *extra_args,
         ],
         cwd=workdir,
         capture_output=True,
         text=True,
         timeout=TIMEOUT_SECONDS,
+        env={**os.environ, "MOCK_EMBEDDING": "false"},
     )
     assert result.returncode == 0, f"quickstart failed:\n{result.stdout}\n{result.stderr}"
     return result.stdout
@@ -102,6 +105,43 @@ def test_quickstart_converges_and_tracks_edits_and_deletes(tmp_path: Path) -> No
     assert issue_count(output) == 0
     assert "3 expected documents" in output
 
+    invalid_env = {
+        **os.environ,
+        "EMBEDDING_MODEL": "cogindex/unregistered-example-model",
+        "MOCK_EMBEDDING": "false",
+    }
+    invalid_env.pop("EMBEDDING_DIMENSIONS", None)
+    invalid = subprocess.run(
+        [
+            sys.executable,
+            str(EXAMPLES / "quickstart_live.py"),
+            "./docs",
+            "--deterministic",
+            "--storage",
+            "./invalid-storage",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=TIMEOUT_SECONDS,
+        env=invalid_env,
+    )
+    assert invalid.returncode == 2
+    assert "environment is not ready" in invalid.stdout
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    empty_output = run_quickstart(
+        tmp_path,
+        "./empty",
+        "--dataset",
+        "empty_dataset",
+        "--search",
+        "anything",
+    )
+    assert issue_count(empty_output) == 0
+    assert "search skipped: dataset 'empty_dataset' has no materialized documents" in empty_output
+
 
 def test_shared_entity_demo_matches_its_documented_output(tmp_path: Path) -> None:
     # examples/README.md quotes this output verbatim, so it is a claim that can
@@ -113,8 +153,10 @@ def test_shared_entity_demo_matches_its_documented_output(tmp_path: Path) -> Non
         capture_output=True,
         text=True,
         timeout=TIMEOUT_SECONDS,
+        env={**os.environ, "MOCK_EMBEDDING": "false", "TMPDIR": str(tmp_path)},
     )
     assert result.returncode == 0, f"demo failed:\n{result.stdout}\n{result.stderr}"
+    assert not list(tmp_path.glob("cogindex-shared-entity-*"))
     entity_lines = [
         line.split("graph entities:")[1].strip()
         for line in result.stdout.splitlines()
@@ -134,8 +176,10 @@ def test_agent_memory_demo_reads_the_replaced_fact(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         timeout=TIMEOUT_SECONDS,
+        env={**os.environ, "MOCK_EMBEDDING": "false", "TMPDIR": str(tmp_path)},
     )
     assert result.returncode == 0, f"demo failed:\n{result.stdout}\n{result.stderr}"
+    assert not list(tmp_path.glob("cogindex-agent-memory-*"))
 
     answer_lines = [line.strip() for line in result.stdout.splitlines() if "Agent answer:" in line]
     assert answer_lines == [

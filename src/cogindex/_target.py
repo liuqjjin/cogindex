@@ -404,6 +404,13 @@ async def _apply_dataset_actions(
     """
     outputs: list[coco.ChildTargetDef[DocumentHandler] | None] = []
     for action in actions:
+        if coco.is_non_existence(action.spec) and action.main_action is None:
+            # User-managed handoff and an already-absent target have no
+            # external work. Do not require a runtime binding merely to
+            # commit NON_EXISTENCE after that binding has been removed.
+            outputs.append(None)
+            continue
+
         runtime_obj = context_provider.get(action.key.runtime_key)
         if not isinstance(runtime_obj, CogneeRuntime):
             raise TypeError(
@@ -413,8 +420,6 @@ async def _apply_dataset_actions(
         runtime: CogneeRuntime = runtime_obj
 
         if coco.is_non_existence(action.spec):
-            # main_action is None here when ownership resolution said hands
-            # off (user-managed data): the dataset's content is left alone.
             if action.main_action == "delete":
                 # Resolve first: both identity and lock scope are physical-user
                 # scoped, and a missing dataset still has a valid scope.

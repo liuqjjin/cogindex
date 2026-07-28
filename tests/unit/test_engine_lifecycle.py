@@ -5,7 +5,7 @@ Covers create, no-op convergence, in-place replacement, metadata-only
 updates, deletion, processing-config invalidation (ADR-0005), and unmount
 ownership semantics (system-managed teardown vs. user-managed hands-off).
 
-These are fake-runtime tests, not integration tests (AGENTS.md rule #7).
+These are fake-runtime tests, not integration tests (AGENTS.md testing rules).
 """
 
 from __future__ import annotations

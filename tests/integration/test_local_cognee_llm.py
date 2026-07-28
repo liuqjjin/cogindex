@@ -2,10 +2,11 @@
 
 Runs the full pipeline: real LLM, real embeddings, real local stack: with
 no mocks at all. Costs money and is nondeterministic by nature, so it is
-opt-in: set ``COGINDEX_RUN_LLM_TESTS=1`` and configure an LLM provider
+opt-in through ``make test-llm``; direct pytest invocations must also set
+``COGINDEX_RUN_LLM_TESTS=1``. Configure an LLM provider first
 (``LLM_API_KEY`` etc., see .env.example). Assertions are structural
-(documents ingested, cognify completed, search returns results), never
-about specific model output.
+(documents ingested, cognify completed, search returns results), never about
+specific model output.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ async def runtime(
 async def test_full_pipeline_with_real_llm(runtime: LocalCogneeRuntime) -> None:
     import cognee
 
+    assert os.environ.get("MOCK_EMBEDDING", "").casefold() != "true"
     handle = await runtime.resolve_dataset(DATASET, TENANT)
     handle = await runtime.add_documents(
         handle,

@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager, ExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Never
 
 from . import _compat
 from ._errors import CogneePipelineError
@@ -229,7 +229,13 @@ class LocalCogneeRuntime:
                 kwargs["user"] = user
                 _compat.validate_embedding_dimensions()
                 result = await compat_info.cognee.add(items, dataset_name=handle.name, **kwargs)
-                _raise_on_errored_runs(result, op="add", dataset=handle.name)
+                _raise_on_errored_runs(
+                    result,
+                    op="add",
+                    dataset=handle.name,
+                    expected_item_count=len(group),
+                    expected_dataset_id=handle.dataset_id,
+                )
                 # Cognee may discover a different vector width while opening
                 # the embedding connection. Refuse to let that silent rewrite
                 # turn the declaration-time fingerprint into a false success.
@@ -242,6 +248,11 @@ class LocalCogneeRuntime:
                 user=user,
                 identity_scope=handle.identity_scope,
             )
+            if handle.dataset_id is None:
+                raise CogneePipelineError(
+                    f"cognee add on dataset {handle.name!r} reported completion "
+                    "without materializing the dataset"
+                )
         return handle
 
     async def purge_document_memory(
@@ -276,7 +287,12 @@ class LocalCogneeRuntime:
         kwargs["user"] = user
         _compat.validate_embedding_dimensions()
         result = await compat_info.cognee.cognify(datasets=[handle.dataset_id], **kwargs)
-        _raise_on_errored_runs(result, op="cognify", dataset=handle.name)
+        _raise_on_errored_runs(
+            result,
+            op="cognify",
+            dataset=handle.name,
+            expected_dataset_id=handle.dataset_id,
+        )
         _compat.validate_embedding_dimensions()
 
     async def teardown_dataset(self, handle: DatasetHandle) -> None:
@@ -551,36 +567,126 @@ def _validate_dataset_name(name: str) -> None:
         raise ValueError("dataset name must not contain NUL characters")
 
 
-def _raise_on_errored_runs(result: Any, *, op: str, dataset: str) -> None:
-    """Fail hard when cognee swallows task errors into its result payload.
+_PIPELINE_SUCCESS_NAMES = frozenset(
+    {
+        "PipelineRunAlreadyCompleted",
+        "PipelineRunCompleted",
+    }
+)
+_PIPELINE_ERROR_NAME = "PipelineRunErrored"
+
+
+def _raise_on_errored_runs(
+    result: Any,
+    *,
+    op: str,
+    dataset: str,
+    expected_item_count: int | None = None,
+    expected_dataset_id: uuid.UUID | None = None,
+) -> None:
+    """Require an explicit successful terminal result from Cognee.
 
     cognee's non-incremental pipeline path collects per-item failures as
     PipelineRunErrored entries in the *return value* and does not raise.
     Treating that as success would commit tracking records for writes that
-    never happened, which is exactly the false success ADR-0003 forbids.
+    never happened, which is exactly the false success ADR-0003 forbids. An
+    empty or unrecognized result is equally unsafe and therefore fails closed.
     """
     errored_count = 0
 
     def collect(run_info: Any) -> None:
         nonlocal errored_count
-        if run_info is not None and type(run_info).__name__ == "PipelineRunErrored":
+        if run_info is None:
+            return
+        if type(run_info).__name__ == _PIPELINE_ERROR_NAME:
             errored_count += 1
+        nested_entries = getattr(run_info, "data_ingestion_info", None)
+        if isinstance(nested_entries, list):
+            for entry in nested_entries:
+                if isinstance(entry, dict):
+                    collect(entry.get("run_info"))
+                else:
+                    collect(entry)
 
-    # add() unwraps a one-dataset result, so a pipeline-wide failure can be the
-    # result itself rather than an entry in data_ingestion_info.
-    collect(result)
-    entries = getattr(result, "data_ingestion_info", None)
-    if isinstance(entries, list):
-        for entry in entries:
-            if isinstance(entry, dict):
-                collect(entry.get("run_info"))
-            else:
-                collect(entry)
-    elif isinstance(result, dict):
+    # Scan nested item results first so an upstream object that contradicts
+    # its own top-level status still cannot be accepted.
+    if isinstance(result, dict):
         for value in result.values():
             collect(value)
+    else:
+        collect(result)
     if errored_count:
         raise CogneePipelineError(
             f"cognee {op} on dataset {dataset!r} reported "
             f"{errored_count} errored pipeline run(s); inspect Cognee's own logs for details"
         )
+
+    if isinstance(result, dict):
+        if len(result) != 1:
+            _raise_unrecognized_pipeline_result(op, dataset)
+        result_key, terminal_result = next(iter(result.items()))
+        if expected_item_count is not None or expected_dataset_id is None:
+            _raise_unrecognized_pipeline_result(op, dataset)
+        if str(result_key) != str(expected_dataset_id):
+            raise CogneePipelineError(
+                f"cognee {op} on dataset {dataset!r} returned no result for the requested dataset"
+            )
+        terminal_results = [terminal_result]
+    else:
+        if expected_item_count is None:
+            _raise_unrecognized_pipeline_result(op, dataset)
+        terminal_results = [result]
+
+    if any(type(run_info).__name__ not in _PIPELINE_SUCCESS_NAMES for run_info in terminal_results):
+        _raise_unrecognized_pipeline_result(op, dataset)
+
+    terminal_result = terminal_results[0]
+    terminal_dataset_id = getattr(terminal_result, "dataset_id", None)
+    if terminal_dataset_id is None or (
+        expected_dataset_id is not None and str(terminal_dataset_id) != str(expected_dataset_id)
+    ):
+        _raise_unrecognized_pipeline_result(op, dataset)
+    if getattr(terminal_result, "dataset_name", None) != dataset:
+        _raise_unrecognized_pipeline_result(op, dataset)
+
+    entries = getattr(terminal_result, "data_ingestion_info", None)
+    if expected_item_count is not None:
+        # add() receives a non-empty payload group. A completed top-level run
+        # must contain one terminal result per requested document. Cognee's
+        # regular path does not echo data_id, so identity cannot be checked
+        # here; count, status and dataset coordinates are the available proof.
+        if not isinstance(entries, list) or len(entries) != expected_item_count:
+            _raise_unrecognized_pipeline_result(op, dataset)
+        nested_results: list[Any] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or "run_info" not in entry:
+                _raise_unrecognized_pipeline_result(op, dataset)
+            nested_results.append(entry["run_info"])
+        if any(
+            type(run_info).__name__ not in _PIPELINE_SUCCESS_NAMES for run_info in nested_results
+        ):
+            _raise_unrecognized_pipeline_result(op, dataset)
+        if any(
+            str(getattr(run_info, "dataset_id", None)) != str(terminal_dataset_id)
+            or getattr(run_info, "dataset_name", None) != dataset
+            for run_info in nested_results
+        ):
+            _raise_unrecognized_pipeline_result(op, dataset)
+    elif isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict) or "run_info" not in entry:
+                _raise_unrecognized_pipeline_result(op, dataset)
+            if type(entry["run_info"]).__name__ not in _PIPELINE_SUCCESS_NAMES:
+                _raise_unrecognized_pipeline_result(op, dataset)
+            if (
+                str(getattr(entry["run_info"], "dataset_id", None)) != str(terminal_dataset_id)
+                or getattr(entry["run_info"], "dataset_name", None) != dataset
+            ):
+                _raise_unrecognized_pipeline_result(op, dataset)
+
+
+def _raise_unrecognized_pipeline_result(op: str, dataset: str) -> Never:
+    raise CogneePipelineError(
+        f"cognee {op} on dataset {dataset!r} returned no recognized "
+        "successful terminal pipeline result"
+    )

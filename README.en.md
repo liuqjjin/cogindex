@@ -6,178 +6,33 @@
 
 [中文说明](README.md)
 
-cogindex maintains knowledge state for long-running Agent and RAG systems. It
-synchronizes only source documents that were added, changed, or removed. If a
-sync stops midway, the next run repeats replacement and cleanup work that was
-not confirmed. Stable document IDs keep an edit from becoming a second,
-stale document.
+cogindex keeps a changing source of knowledge consistent with its materialized
+knowledge-store state. It assigns stable identities to source documents,
+updates only the affected state when content or processing configuration
+changes, and replays operations that were not confirmed after an interrupted
+sync.
 
-CocoIndex records the desired source state and sync history, while Cognee
-stores raw documents, the knowledge graph, and vectors. cogindex decides when
-to create, replace, recreate, or delete data. It does not rank retrieval
-results, manage prompts, or generate answers.
+The current implementation uses CocoIndex for desired-state tracking and
+Cognee for raw documents, graph data, and vectors. cogindex owns writes,
+replacement, deletion, retry, and dataset locking. Retrieval, ranking, and
+answer generation are outside its scope.
 
-## Problem
+## Why
 
-A long-running knowledge base is not a one-time import. Source documents are
-edited and removed, processing configuration changes, and a process can exit
-before raw data, graph data, vectors, and tracking records all agree. Common
-failure modes include:
+A knowledge store is not a one-time import. Documents are edited and removed,
+processing configuration changes, and a process may exit before raw data,
+graph data, vectors, and tracking records agree. Three details matter:
 
-- an edit receives a new identity while the previous document remains stored;
-- an in-place update keeps graph or vector data derived from the old content;
-- an interrupted delete leaves a raw row marked complete but removes its
-  derivatives;
-- concurrent replacement, deletion, and dataset teardown interleave.
+- a content-derived identity turns an edit into a second document;
+- an in-place rewrite can leave graph and vector data derived from old text;
+- the tracking store and knowledge store cannot share a transaction, so one
+  function return value is not enough to recover an interrupted write.
 
-With Cognee 1.4, re-adding the same `data_id` does not remove old derivatives,
-and the default incremental-loading and data-cache gates can skip changed
-content. CocoIndex tracking and Cognee storage also cannot share a
-transaction, so a retry cannot rely on the outcome of one function call.
+cogindex separates identity from content, expresses replacement and deletion
+as replay-safe steps, and confirms tracking state only after the external write
+succeeds.
 
-## Sync path
-
-```mermaid
-flowchart LR
-    source["Documents, database rows, object storage"] --> coco["CocoIndex<br/>change detection"]
-    tracking[("tracking store")] <--> coco
-    coco --> connector["cogindex<br/>stable IDs and operation plan"]
-    connector --> lock["dataset lock"]
-    lock --> cognee["Cognee<br/>raw data, graph, vectors"]
-    agent["Agent / RAG"] -->|retrieve| cognee
-    cognee -->|context| agent
-```
-
-During a sync, CocoIndex compares the current declarations with its previous
-tracking records. cogindex computes an operation plan in the I/O-free
-`reconcile()` method, then acquires a dataset lock and calls Cognee from an
-asynchronous sink. Agents continue to query Cognee directly. See the
-[design overview](docs/design.md) for the full call chain.
-
-## Design
-
-### Stable document identity
-
-The caller supplies a source identity that does not change with the content:
-for example, a repository-relative path, database primary key, or object-store
-key. cogindex encodes the runtime `ContextKey`, Cognee user id and active
-tenant, cogindex's logical tenant, dataset name, and source key, then derives a
-UUID5 `data_id`. Content is deliberately excluded, so an edit still addresses
-the original Cognee row. Including both physical ownership coordinates keeps
-separate scopes on shared storage from colliding on Cognee's global `Data.id`.
-
-Separate fingerprints cover content, external metadata, weight, label, and
-processing configuration. The `data_id` selects the document; the
-fingerprints select a label update, derivative replacement, or raw-row
-recreation. A source rename is a delete plus a create.
-
-### Incremental replacement and deletion
-
-| Change | Operation |
-| --- | --- |
-| New document | add raw content, then cognify |
-| Content, external metadata, `node_set`, or processing configuration | purge old graph and vectors, re-add under the same `data_id`, and reprocess |
-| `importance_weight` | hard-delete and recreate under the same `data_id` |
-| Label only, with a confirmed previous state | update the label without extraction |
-| Source removed | delete the raw row and data that no remaining document references |
-
-One dataset batch runs in a fixed order: hard deletes, derivative purges, one
-batched `add`, and one `cognify` when needed. The add call explicitly disables
-`incremental_loading` and `data_cache` so a completed status cannot swallow
-replacement content.
-
-### Retry after failure
-
-Before external writes, CocoIndex keeps the new intent alongside every
-possible previous record. It commits the new tracking record only after the
-Cognee sink succeeds. If the process exits between those steps, the next sync
-replays idempotent replacement or deletion from the old and new possibilities.
-
-An uncertain document receives at least one purge and rebuild even when its
-content fingerprint is unchanged. This repairs the state where an interrupted
-hard delete removed derivatives but left the completed raw row. Convergence
-assumes that the source and processing configuration eventually stop changing,
-tracking history is retained, upstream recovers, and a later sink plus tracking
-commit completes.
-
-### Concurrent writers
-
-Create, replace, delete, and whole-dataset teardown for one dataset take the
-same lock. The default lock covers one process and one event loop. Multiple
-processes or event loops use `PostgresAdvisoryLockProvider`, with every writer
-pointing at the same PostgreSQL lock database.
-
-The lock covers cogindex writers only; it cannot stop another application from
-calling Cognee directly and does not provide generation fencing.
-
-## Example: replace an old fact
-
-The example needs no model credentials:
-
-```bash
-git clone https://github.com/liuqjjin/cogindex.git
-cd cogindex
-uv sync --all-extras
-uv run python examples/agent_memory_demo.py
-```
-
-It first synchronizes `ProjectAtlas routes alerts to BlueQueue` and reads that
-relationship from Cognee's graph. It then edits the same `routing.md` to say
-`GreenQueue`, synchronizes again, and runs the same lookup:
-
-```text
-Agent answer: ProjectAtlas routes alerts to BlueQueue.
-Agent answer: ProjectAtlas routes alerts to GreenQueue.
-Graph check: GreenQueue present=True
-Graph check: BlueQueue absent=True
-```
-
-Fixed LLM and embedding substitutes make extraction deterministic; the
-relationship lookup reads Cognee's local graph store. The example validates
-knowledge state after an update, not real-model answer quality. See
-[`examples/quickstart_live.py`](examples/quickstart_live.py) for folder
-synchronization and [`.env.example`](.env.example) for real-model settings.
-
-## Validation
-
-| Check | Current scope |
-| --- | --- |
-| Unit tests | 388 pytest cases |
-| Failure regressions | 13 interruption scenarios, represented by 17 test functions |
-| Property testing | one Hypothesis state machine, up to 60 sequences of 40 steps |
-| Local Cognee integration | 14 cases over SQLite, LanceDB, embedded graph, and fixed model outputs |
-| PostgreSQL lock integration | 4 cases covering exclusion and release across independent providers |
-| Coverage | 403 cases requiring no external service; coverage.py branch tracking enabled, 91% total |
-
-The core CI matrix runs Ruff, mypy, unit and property tests, and the upstream
-audit gate across Linux/macOS and Python 3.11–3.13. Coverage, local Cognee,
-PostgreSQL, installation from a built wheel in a clean environment, and
-security auditing run as separate jobs, for 11 jobs in total. The fault model
-and property tests use an explicit tracking model and in-memory runtime; the
-local integration tier uses fixed model outputs. Neither is presented as a
-real-LLM end-to-end test.
-
-### Consistency comparison
-
-The real local-storage comparison starts from the same six documents, changes
-two, deletes one, and repeats each arm three times:
-
-| Metric | Hard full rebuild | cogindex incremental sync |
-| --- | ---: | ---: |
-| Final documents | 5 | 5 |
-| Documents submitted to `add` | 5 | 2 |
-| Unchanged documents reprocessed | 3 | 0 |
-| Stale version-marker entities | 0 | 0 |
-| Missing expected marker entities | 0 | 0 |
-
-On this small corpus, incremental sync was not faster: its median was 9.5655
-seconds versus 7.0587 seconds for a full rebuild. The benchmark checks work
-scope, document state, and specific graph markers. It does not represent
-real-model throughput or scan the vector store for every possible orphan. See
-[docs/benchmarks.md](docs/benchmarks.md) for the environment, raw samples, and
-reproduction command.
-
-## Installation and integration
+## Installation
 
 The package is not published to PyPI:
 
@@ -187,7 +42,10 @@ python3 -m pip install "git+https://github.com/liuqjjin/cogindex.git"
 uv add "cogindex @ git+https://github.com/liuqjjin/cogindex.git"
 ```
 
-Minimal setup:
+Supported versions are Python `>=3.11,<3.14`, CocoIndex `>=1.0.18,<2`, and
+Cognee `>=1.4.0,<1.5`.
+
+## Minimal integration
 
 ```python
 from pathlib import Path
@@ -201,76 +59,173 @@ runtime = cogindex.LocalCogneeRuntime(
     data_root=Path("./data/cognee"),
     system_root=Path("./data/cognee-system"),
 )
-environment = coco.Environment(coco.Settings.from_env(db_path="./data/cocoindex-tracking"))
+environment = coco.Environment(coco.Settings.from_env(db_path="./data/tracking"))
 environment.context_provider.provide(COGNEE, runtime)
 
 
 @coco.fn
 async def app_main() -> None:
     target = await coco.use_mount(cogindex.declare_dataset_target, COGNEE, "docs")
-    target.declare_document("guide.md", "CocoIndex tracks changes.", label="guide.md")
+    target.declare_document("guide.md", "This content may change on the next run.")
 ```
 
 `"guide.md"` is the stable source identity. A repository-relative path,
-database primary key, or object-storage key works as well. Content may change;
-the key must not.
+database primary key, or object-store key works as well. Content may change;
+the key must not. The `ContextKey` also needs a fixed logical name and must not
+contain a URL, DSN, or credential.
 
-The `ContextKey` name also participates in identity and is persisted by
-CocoIndex. Use a fixed logical name such as `"cognee"`, never a URL, DSN, or
-credential.
+See [`examples/quickstart_live.py`](examples/quickstart_live.py) for a complete
+folder sync. `doctor()` checks local configuration. `verify_dataset()` compares
+document presence, identity, processing status, and labels.
 
-`doctor()` checks the local environment. `verify_dataset()` checks raw-row
-presence, identity, completion, and labels; it cannot prove that graph or
-vector contents match the current text.
+## How it works
+
+```mermaid
+flowchart LR
+    source["Documents, database rows, object storage"] --> state["Desired state and change tracking<br/>CocoIndex"]
+    tracking[("tracking store")] <--> state
+    state --> sync["cogindex<br/>identity, diff, retry plan"]
+    sync --> lock["dataset lock"]
+    lock --> storage["Knowledge storage<br/>raw data, graph, vectors<br/>Cognee"]
+```
+
+`reconcile()` compares declarations with previous records and performs no I/O.
+Connections, locking, cleanup, and writes happen in asynchronous sinks. See
+the [design overview](docs/design.md) for the full call chain.
+
+### Identity and change classification
+
+A document `data_id` is a UUID5 over the identity schema, runtime key, resolved
+Cognee user/tenant scope, dataset, and source key. Content is excluded. While
+those coordinates remain stable, an edit addresses the same stored identity.
+
+Separate fingerprints cover content, external metadata, weight, label, and
+processing configuration. Identity selects the record; fingerprints select a
+label update, derivative replacement, raw-row recreation, or deletion. Model,
+prompt, chunking, ontology, and embedding changes invalidate derivatives.
+Credentials, endpoints, timeouts, and logging settings never enter tracking
+records.
+
+### Synchronization rules
+
+| Change | Operation |
+| --- | --- |
+| New document | write raw content, then process it |
+| Content, external metadata, `node_set`, or processing configuration | purge old graph and vectors, re-add under the same ID, and reprocess |
+| `importance_weight` | hard-delete and recreate under the same ID |
+| Label only, with a confirmed previous state | update the label without extraction |
+| Source removed | delete raw content and derivatives no longer referenced elsewhere |
+
+One dataset batch runs hard deletes, derivative purges, one batched write, and
+one processing call when required. Unchanged documents do not re-enter the
+write path.
+
+### Recovery
+
+The tracking store and Cognee cannot share a transaction. Before a sink runs,
+CocoIndex retains the intended record and every possible old record. The new
+record is confirmed only after the sink succeeds. If the process exits between
+those steps, the next sync treats the state as uncertain and safely replays
+replacement or deletion.
+
+An existing document that may be missing receives at least one purge and
+rebuild even if its content fingerprint is unchanged. This repairs an
+interrupted delete that removed derivatives but left a raw row marked complete.
+Convergence assumes stable desired state, retained tracking history, upstream
+recovery, and at least one later sink-plus-commit that completes.
+
+### Concurrency
+
+Create, replace, delete, and whole-dataset teardown for one dataset take the
+same lock. `InProcessLockProvider` covers one process and event loop.
+Multi-process or multi-loop writers use `PostgresAdvisoryLockProvider`, with
+every writer pointing at the same PostgreSQL lock database.
+
+The lock covers cogindex writers only. It cannot stop another application from
+writing Cognee directly and does not provide generation fencing.
+
+## Runnable examples
+
+From the repository root:
+
+```bash
+uv sync --all-extras
+mkdir -p my-docs
+printf 'AlphaCorp uses SharedQueue.\\n' > my-docs/guide.md
+uv run python examples/quickstart_live.py ./my-docs --deterministic
+uv run python examples/shared_entity_demo.py
+```
+
+`quickstart_live.py` covers folder additions, edits, and removals.
+`shared_entity_demo.py` shows that a graph entity survives until its final
+source is removed. [`agent_memory_demo.py`](examples/agent_memory_demo.py)
+shows a downstream graph query after one document changes from `BlueQueue` to
+`GreenQueue`. Fixed model substitutes make extraction reproducible; they do
+not represent real-model quality.
+
+## Evaluation
+
+`make ci` runs Ruff, strict mypy, the upstream-review coverage gate, unit
+tests, and the Hypothesis state machine. The core matrix covers Linux, macOS,
+and Python 3.11–3.13. Local Cognee integration, PostgreSQL locking, clean-wheel
+installation, and dependency auditing run separately. Current total coverage
+is 90% with branch tracking enabled.
+
+The consistency comparison starts with six documents, changes two, and removes
+one:
+
+| Metric | Hard full rebuild | cogindex incremental sync |
+| --- | ---: | ---: |
+| Final documents | 5 | 5 |
+| Documents submitted to the write stage | 5 | 2 |
+| Unchanged documents reprocessed | 3 | 0 |
+| Checked stale version-marker entities | 0 | 0 |
+| Checked missing expected marker entities | 0 | 0 |
+
+This scenario checks work scope and specific state markers. It uses no real
+model and is not a throughput claim or proof that every possible orphan vector
+is absent. See [the benchmark notes](docs/benchmarks.md) for the environment,
+raw samples, and reproduction command.
 
 ## Compatibility and limits
 
-Version `0.1.0` supports Python `>=3.11,<3.14`, CocoIndex `>=1.0.18,<2`, and
-Cognee `>=1.4.0,<1.5`. The API may still change; begin with datasets that can
-be rebuilt.
+Version `0.1.0` has an evolving API. Start with datasets that can be rebuilt.
 
-- Cognee's REST add endpoint cannot accept a caller-supplied `data_id`, so
-  only the local Python SDK runtime is supported.
-- `LocalCogneeRuntime` rejects an active `cognee.serve()` remote client; call
-  `await cognee.disconnect()` first.
-- `data_root` and `system_root` are required, and all live local runtimes in
-  one process must use the same pair.
-- An embedding model absent from Cognee's dimension registry requires its
-  actual vector width in `EMBEDDING_DIMENSIONS`. A width change detected
-  around a pipeline run fails instead of confirming the sync.
-- Cognee's model, prompt, ontology, and embedding settings are process-global.
-  Do not mutate them between target construction and sink completion; start a
-  new flow run after a deliberate configuration change.
-- The local runtime accepts only `tenant="default"`; the Cognee user id and
-  that user's active tenant jointly define the physical access scope. Do not
-  switch the active tenant while a sync is running.
-- Keep one `ContextKey` bound to the same user id and active tenant. A runtime
-  can detect rebinding only within its own process; after a cross-run rebind,
-  sync or unmount may act on the new scope's same-name dataset. Clean up or
-  reconcile the old scope under its old binding, then use a new `ContextKey`
-  for the new scope.
-- Unmounting a system-managed target hard-deletes its Cognee dataset.
-  `managed_by="user"` suppresses only that whole-dataset teardown.
-- Cognee does not propagate individual raw-row deletion errors during
-  whole-dataset teardown, so an undetectable orphan row is possible.
-- If a custom chunker or graph model changes implementation without changing its class name or
-  schema, bump an implementation revision in `ProcessingConfig.extras` to trigger reprocessing.
-- Losing the CocoIndex tracking store removes the ownership history needed to
-  identify source documents that were deleted. An exclusively owned dataset
-  must be stopped, hard-emptied, and fully synchronized; shared datasets need
-  manual reconciliation or a new name.
-- `verify_dataset()` cannot see whether graph and vector derivatives still
-  match the current source content.
+- Cognee's REST `add` cannot accept a caller-supplied `data_id`; only the local
+  Python SDK runtime is supported.
+- `LocalCogneeRuntime` requires explicit `data_root` and `system_root`, and all
+  live instances in one process must use the same pair. Unregistered embedding
+  models also require an explicit `EMBEDDING_DIMENSIONS`.
+- Cognee model, prompt, ontology, embedding, and active-tenant settings are
+  process-global and must not change during a sync.
+- Replacing a llama.cpp weight file at the same path does not change the
+  automatic processing fingerprint; bump a stable model revision in
+  `ProcessingConfig.extras` at the same time.
+- Keep a `ContextKey` bound to one Cognee user/tenant scope. Process a previous
+  scope under its old binding before switching to a new key.
+- Unmounting a system-managed target deletes the whole dataset.
+  `managed_by="user"` suppresses only that teardown. Cognee does not currently
+  propagate individual raw-row deletion failures from whole-dataset cleanup.
+- Losing the tracking store removes the ownership history needed to identify
+  source documents that were deleted. An exclusively owned dataset must be
+  stopped, hard-emptied, and fully synchronized; shared datasets need manual
+  reconciliation or a new name.
+- `verify_dataset()` reads under the dataset lock, but does not compare raw
+  content, graph nodes, or vectors and cannot by itself prove derivative
+  freshness.
 
-## Development and documentation
+See the [design overview](docs/design.md) and
+[architecture decisions](docs/adr/) for the complete operating boundaries.
+
+## Development
 
 ```bash
 make ci
-make test-integration
+make test-integration  # local Cognee with fixed model outputs
 make test-postgres
 make coverage
 make smoke
-make benchmark-smoke
+make build
 ```
 
 - [Public API](src/cogindex/__init__.py)

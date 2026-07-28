@@ -15,10 +15,9 @@ under configuration change is therefore entirely this connector's job.
 A `processing_fingerprint` is computed over every input that shapes
 derivatives:
 
-- graph model identity plus a fingerprint of its JSON schema, so a structural
-  edit to a model that keeps its name still invalidates,
-- custom extraction-prompt content, chunker identity, explicit chunk size and
-  temporal mode,
+- for the default pipeline, graph model identity plus a fingerprint of its
+  JSON schema and custom extraction-prompt content,
+- chunker identity, explicit chunk size and temporal mode,
 - one `runtime_config_fingerprint` over Cognee's effective configuration:
   - Cognee version;
   - base, extraction and summarization LLM provider/model/API version;
@@ -50,6 +49,13 @@ must bump a stable revision in `ProcessingConfig.extras`, for example
 `("implementation_revision", "2")`. This is explicit rather than based on
 `inspect.getsource()`: source text is unavailable for some classes and is not a
 stable deployment artifact.
+
+The same rule applies to a mutable local model artifact. Replacing a llama.cpp
+GGUF file at the same path does not change the path digest recorded by
+automatic inspection. Deployments doing that must bump a content or release
+revision in `ProcessingConfig.extras`, such as
+`("llama_cpp_model_revision", "sha256:...")`. Hashing a multi-gigabyte model on
+every target declaration would be a poor implicit contract.
 
 `get_max_chunk_tokens()` is asynchronous because it constructs the configured
 embedding engine. Target declaration stays synchronous, but Cognee's
@@ -92,6 +98,12 @@ path reaches tracking. When `custom_prompt` is non-empty, Cognee does not read
 its default graph prompt, so that default is deliberately omitted. Normal and
 temporal profiles likewise include only the prompts used by their selected
 pipeline.
+
+Cognee's temporal pipeline ignores `graph_model` and `custom_prompt`.
+`CognifyProfile` therefore rejects an explicit graph model or a non-empty
+custom prompt in temporal mode, and its processing fingerprint leaves the
+corresponding fields unset. This avoids both a misleading declaration and a
+full reprocessing caused by an input Cognee would not use.
 
 Cognee selects a custom prompt by truthiness. An empty string is therefore
 normalized to the same effective configuration as `None`: neither receives a

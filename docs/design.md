@@ -1,19 +1,18 @@
 # 设计说明
 
-这份文档说明 cogindex 怎样把一组持续变化的文档同步到 Cognee。具体取舍和上游依据
-仍以 [`docs/adr/`](adr/) 为准。
+这份文档说明 cogindex 怎样维护持续变化的知识源与知识存储状态之间的一致性。当前实现
+使用 Cognee 作为知识存储；具体取舍和上游依据仍以 [`docs/adr/`](adr/) 为准。
 
 ## 范围
 
-cogindex 处理的是文档型知识库：
+cogindex 处理的是文档型知识库的写入侧：
 
 - 源端不断出现新增、修改和删除；
 - Cognee 保存原文，并从原文生成图节点、关系和向量；
-- Agent 或 RAG 应用直接从 Cognee 检索；
 - 同一个源文档修改后，旧的图和向量不能继续参与检索。
 
-cogindex 不负责对话历史、检索排序、提示词和答案生成，也不改动 Cognee 的知识抽取
-逻辑。它只负责把 CocoIndex 发现的变化转换成正确的 Cognee 写入、替换和删除操作。
+cogindex 不负责读侧缓存、检索排序、提示词和答案生成，也不改动 Cognee 的知识抽取
+逻辑。它把 CocoIndex 发现的变化转换成 Cognee 的写入、替换和删除操作。
 
 ## 组件
 
@@ -24,8 +23,6 @@ flowchart LR
     coco --> connector["cogindex<br/>稳定 ID 与操作计划"]
     connector --> lock["数据集锁"]
     lock --> cognee["Cognee<br/>原文、图、向量"]
-    agent["Agent / RAG"] -->|检索| cognee
-    cognee -->|上下文| agent
 ```
 
 | 组件 | 职责 |
@@ -34,7 +31,7 @@ flowchart LR
 | CocoIndex | 发现声明变化，保存上次同步记录，调用 target handler |
 | cogindex | 生成稳定 `data_id`，判断新增、替换、重建、标签更新或删除 |
 | `CogneeRuntime` | 执行 Cognee 的写入、清理、处理和读取 |
-| Cognee | 保存原文、图和向量，供上层应用查询 |
+| Cognee | 保存原文、图和向量，供读侧应用查询 |
 
 target 分为两层。数据集 handler 管理配置和数据集生命周期；文档 handler 管理数据集下的
 每一份文档。卸载系统管理的数据集 target 时，数据集 handler 会执行整库清理。
@@ -116,6 +113,12 @@ sequenceDiagram
 
 自定义分块器或图模型如果只改了 Python 实现、类名和 schema 都没变，调用方需要在
 `ProcessingConfig.extras` 中递增实现版本；项目不使用不稳定的源码文本作为版本号。
+同一路径下替换 llama.cpp 权重文件也需要在 `extras` 中递增模型版本，例如
+`("llama_cpp_model_revision", "sha256:...")`。自动指纹记录路径摘要，不会在每次声明时
+读取并哈希整个权重文件。
+
+Temporal cognify 不使用 `graph_model` 和 `custom_prompt`。这两个参数与 temporal 模式
+同时声明时会在构造阶段报错，不会触发一次实际结果不变的全量重新处理。
 
 ## 失败和重试
 
@@ -135,8 +138,8 @@ sink 成功后才允许 CocoIndex 提交新的跟踪记录；如果进程在外�
 4. 后续至少有一次同步成功完成。
 
 满足这些条件后，后续成功同步会得到相同的当前文档集合，并重新执行已知处于不确定状态
-的派生处理。`verify_dataset()` 可检查原文是否存在、身份、处理完成状态和标签，但目前
-看不到图或向量是否仍对应当前正文。
+的派生处理。`verify_dataset()` 会取得同一数据集锁并在锁内重新解析数据集，再检查原文
+是否存在、身份、处理完成状态和标签；它目前仍看不到图或向量是否对应当前正文。
 
 ## 并发
 
@@ -148,9 +151,9 @@ sink 成功后才允许 CocoIndex 提交新的跟踪记录；如果进程在外�
 PostgreSQL 数据库作为锁服务。锁只约束通过 cogindex 发起的操作，不能阻止其他进程直接
 调用 `cognee.add()`、`cognee.cognify()` 或删除接口。
 
-## Agent 和 RAG 场景
+## 读侧边界
 
-对长时间运行的 Agent / RAG 系统，cogindex 负责的是知识存储的更新边界：
+cogindex 负责知识存储的更新边界：
 
 - 文档更新后，清理这份文档旧版本产生的图和向量，再写入并处理新内容；
 - 文档删除后，清理其原文及不再被其他文档引用的派生数据。
@@ -159,9 +162,8 @@ PostgreSQL 数据库作为锁服务。锁只约束通过 cogindex 发起的操�
 信息。
 
 [`examples/agent_memory_demo.py`](../examples/agent_memory_demo.py) 用一个图查询工具演示
-第一种情况：`ProjectAtlas` 的路由从 `BlueQueue` 改成 `GreenQueue`，再次提问得到新队列，
-并直接检查旧实体已从图中消失。示例没有引入 Agent 框架，目的是把同步正确性与回答生成
-分开验证。
+第一种情况：`ProjectAtlas` 的路由从 `BlueQueue` 改成 `GreenQueue` 后，相同查询得到
+新队列，并直接检查旧实体已从图中消失。该示例把同步结果与回答生成分开验证。
 
 ## 已知限制
 
@@ -179,6 +181,8 @@ PostgreSQL 数据库作为锁服务。锁只约束通过 cogindex 发起的操�
 - CocoIndex 跟踪库丢失后，cogindex 无法知道哪些 Cognee 原文原本由它管理、但已经从源端
   删除。独占数据集需要停止写入、清空后全量同步；共享数据集需要人工核对或改用新名称。
 - `verify_dataset()` 不逐项比较正文、图节点和向量，不能单独证明检索内容没有过期。
+- 同一路径替换本地 llama.cpp 权重不会自动改变处理指纹，调用方必须在
+  `ProcessingConfig.extras` 中更新模型版本。
 
 ## ADR 索引
 

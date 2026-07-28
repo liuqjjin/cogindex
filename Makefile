@@ -30,7 +30,7 @@ test-integration: ## Real local Cognee stack (SQLite+LanceDB+embedded graph), de
 	$(UV) run pytest tests/integration -q -m integration
 
 test-llm:         ## Opt-in: real LLM provider (requires LLM_API_KEY)
-	$(UV) run pytest tests/integration -q -m integration_llm
+	COGINDEX_RUN_LLM_TESTS=1 $(UV) run pytest tests/integration -q -m integration_llm
 
 test-postgres:    ## PostgreSQL advisory-lock tests (Docker/testcontainers or POSTGRES_DSN)
 	$(UV) run pytest tests/integration -q -m postgres

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import os
 import pathlib
 from collections.abc import Iterator
@@ -107,8 +108,8 @@ def deterministic_llm() -> Iterator[None]:
 async def main() -> None:
     args = parse_args()
     if args.deterministic:
-        os.environ.setdefault("MOCK_EMBEDDING", "true")
-        os.environ.setdefault("TELEMETRY_DISABLED", "1")
+        os.environ["MOCK_EMBEDDING"] = "true"
+        os.environ["TELEMETRY_DISABLED"] = "1"
 
     import cocoindex as coco
     from cocoindex.connectors import localfs
@@ -127,12 +128,22 @@ async def main() -> None:
         print("\nenvironment is not ready; fix the findings above")
         if not args.deterministic:
             print("if only model credentials are missing, use --deterministic")
-        return
+        raise SystemExit(2)
 
     env = coco.Environment(coco.Settings.from_env(db_path=args.storage / "cocoindex-tracking"))
     env.context_provider.provide(cognee_key, runtime)
 
     folder_root = args.folder.resolve()
+    profile = cogindex.CognifyProfile()
+    processing = cogindex.processing_config_from_profile(profile)
+    if args.deterministic:
+        # The substitute produces different derivatives from a configured
+        # model even when both expose the same model identifiers. Keep its
+        # persistent tracking state distinct so switching modes reprocesses.
+        processing = dataclasses.replace(
+            processing,
+            extras=(*processing.extras, ("example_adapter", "deterministic-v1")),
+        )
 
     @coco.fn
     async def process_file(file: localfs.File, target: cogindex.DatasetTarget) -> None:
@@ -143,7 +154,13 @@ async def main() -> None:
 
     @coco.fn
     async def app_main() -> None:
-        target = await coco.use_mount(cogindex.declare_dataset_target, cognee_key, args.dataset)
+        target = await coco.use_mount(
+            cogindex.declare_dataset_target,
+            cognee_key,
+            args.dataset,
+            profile=profile,
+            processing=processing,
+        )
         files = localfs.walk_dir(
             args.folder,
             live=args.live,
@@ -178,6 +195,9 @@ async def main() -> None:
             import cognee
 
             handle = await runtime.resolve_dataset(args.dataset, "default")
+            if handle.dataset_id is None:
+                print(f"\nsearch skipped: dataset {args.dataset!r} has no materialized documents")
+                return
             results = await cognee.search(args.search, datasets=[handle.dataset_id])
             print(f"\nsearch: {args.search!r}")
             for result in results if isinstance(results, list) else [results]:

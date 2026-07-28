@@ -22,10 +22,10 @@ make setup             # uv sync --all-extras
 make ci                # lint + typecheck + audit gate + unit + property
 make test              # unit only, no services
 make test-property     # Hypothesis state machine
-make test-integration  # real local Cognee, deterministic LLM (about 2 minutes)
+make test-integration  # real local Cognee, deterministic LLM (several minutes)
 make test-postgres     # needs Docker or POSTGRES_DSN
 make test-llm          # opt-in, real provider, costs money
-make coverage          # unit + property + integration; currently 91% overall
+make coverage          # unit + property + integration; currently 90% overall
 make smoke             # build a wheel and import it in a clean venv
 ```
 
@@ -89,8 +89,10 @@ teardown takes that same lock before removing the whole dataset.
    metadata fingerprint contains only the label and takes the cheap re-add path.
 7. Version-sensitive cognee imports go through `src/cogindex/_compat.py` and
    nowhere else. No monkey-patching.
-8. Never commit a tracking record for a write that was not attempted, and never
-   treat a cognee result containing `PipelineRunErrored` as success.
+8. Never commit a tracking record for a write that was not attempted. Accept
+   only explicit `PipelineRunCompleted` / `PipelineRunAlreadyCompleted`
+   terminal results; empty, malformed, non-terminal, wrong-dataset, partial
+   add, and `PipelineRunErrored` results all fail closed.
 9. Logs carry phase, counts and timing. Never content, never secrets.
 10. Every cogindex mutation of one dataset, including system-managed teardown,
     is serialized through the runtime's dataset lock. Do not move that locking
@@ -152,6 +154,8 @@ becomes an ADR.
   orphaned nodes behind; this was measured, so do not re-litigate it without
   new measurements.
 - Cognee's own dataset lock is process-local asyncio only.
+- Cognee's temporal cognify path ignores `graph_model` and `custom_prompt`;
+  cogindex rejects those explicit inputs in temporal profiles.
 - Cognee's default storage paths are inside its installed package. Always pass
   `data_root` and `system_root`, absolutized.
 - The CocoIndex handler attachment method is `attachments() -> dict`, plural.
@@ -181,6 +185,9 @@ work to "fix" them without an upstream change first.
   deleted; this is not per-document ownership.
 - `verify_dataset` compares presence, identity, completion and label. It cannot
   see whether derivatives match current content.
+- Replacing a llama.cpp model file in place does not change the path digest in
+  the automatic processing fingerprint. Bump a stable model revision in
+  `ProcessingConfig.extras`.
 - Losing the CocoIndex tracking store erases the only record of which Cognee
   rows were previously managed. A memory-only purge is insufficient because
   it keeps raw rows for source documents that may since have been deleted.

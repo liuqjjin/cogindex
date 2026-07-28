@@ -1,13 +1,21 @@
 [project]
 name = "cogindex"
 version = "0.1.0"
-description = "Incrementally synchronize changing documents into Cognee with stable identity and retry-safe updates"
+description = "Keep changing knowledge sources and materialized indexes consistent with stable identity and retry-safe updates"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "liuqjjin" }]
 requires-python = ">=3.11,<3.14"
-keywords = ["cocoindex", "cognee", "knowledge-graph", "incremental", "rag", "etl"]
+keywords = [
+    "consistency",
+    "synchronization",
+    "incremental-indexing",
+    "knowledge-base",
+    "knowledge-graph",
+    "cocoindex",
+    "cognee",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -52,6 +60,35 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cogindex"]
+
+[tool.hatch.build.targets.sdist]
+# Keep source archives independent of gitignored local audit clones and other
+# machine-only state. Every published path is named explicitly.
+include = [
+    "/.env.example",
+    "/.pre-commit-config.yaml",
+    "/.python-version",
+    "/AGENTS.md",
+    "/ATTRIBUTION.md",
+    "/CHANGELOG.md",
+    "/CODE_OF_CONDUCT.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/Makefile",
+    "/NOTICE",
+    "/README.en.md",
+    "/README.md",
+    "/SECURITY.md",
+    "/UPSTREAM_LOCK.json",
+    "/benchmarks",
+    "/docs",
+    "/examples",
+    "/pyproject.toml",
+    "/scripts",
+    "/src",
+    "/tests",
+    "/uv.lock",
+]
 
 [tool.ruff]
 line-length = 100

@@ -38,10 +38,59 @@ def test_load_succeeds_and_reports_a_version() -> None:
     )
 
 
-def test_top_level_api_cogindex_calls_is_present() -> None:
+def test_runtime_api_surface_is_callable_and_load_fails_fast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cognee = _compat.load().cognee
-    for name in ("add", "cognify", "forget", "datasets"):
-        assert hasattr(cognee, name), f"cognee.{name} disappeared"
+    surfaces = (
+        (
+            cognee.add,
+            ("data",),
+            (
+                "dataset_name",
+                "user",
+                "node_set",
+                "dataset_id",
+                "incremental_loading",
+                "importance_weight",
+                "data_cache",
+            ),
+        ),
+        (
+            cognee.cognify,
+            (),
+            (
+                "datasets",
+                "user",
+                "graph_model",
+                "chunker",
+                "chunk_size",
+                "custom_prompt",
+                "temporal_cognify",
+            ),
+        ),
+        (cognee.forget, (), ("data_id", "dataset_id", "memory_only", "user")),
+        (cognee.datasets.list_datasets, (), ("user",)),
+        (cognee.datasets.list_data, ("dataset_id",), ("user",)),
+        (cognee.config.data_root_directory, ("data_root_directory",), ()),
+        (cognee.config.system_root_directory, ("system_root_directory",), ()),
+    )
+    for callable_api, positional, keyword in surfaces:
+        assert callable(callable_api)
+        parameters = inspect.signature(callable_api).parameters
+        assert set(positional) <= parameters.keys()
+        assert set(keyword) <= parameters.keys()
+
+    # Prove load() owns the gate rather than merely mirroring the currently
+    # installed API in this test. A moved nested dataset method must fail before
+    # LocalCogneeRuntime reaches its first sync.
+    monkeypatch.setattr(cognee.datasets, "list_data", None)
+    _compat.load.cache_clear()
+    try:
+        with pytest.raises(CompatibilityError, match=r"datasets\.list_data is not callable"):
+            _compat.load()
+    finally:
+        _compat.load.cache_clear()
 
 
 def test_remote_mode_check_reads_current_upstream_state() -> None:
@@ -163,8 +212,12 @@ def test_model_arg_sanitizer_recursively_excludes_secrets_and_execution_knobs() 
             "nested": {
                 "auth": "first-auth",
                 "api_key": "first-secret",
+                "accessToken": "first-access-token",
+                "bearerToken": "first-bearer-token",
+                "clientSecret": "first-client-secret",
                 "endpoint": "https://first.invalid",
                 "headers": {"Authorization": "Bearer first-secret"},
+                "privateKey": "first-private-key",
                 "timeout": 10,
                 "retry_count": 2,
                 "batch_size": 8,
@@ -185,8 +238,12 @@ def test_model_arg_sanitizer_recursively_excludes_secrets_and_execution_knobs() 
             "nested": {
                 "auth": "second-auth",
                 "api_key": "second-secret",
+                "accessToken": "second-access-token",
+                "bearerToken": "second-bearer-token",
+                "clientSecret": "second-client-secret",
                 "endpoint": "https://second.invalid",
                 "headers": {"Authorization": "Bearer second-secret"},
+                "privateKey": "second-private-key",
                 "timeout": 90,
                 "retry_count": 9,
                 "batch_size": 64,

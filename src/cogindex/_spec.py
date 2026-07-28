@@ -69,6 +69,10 @@ class CognifyProfile:
             raise TypeError("custom_prompt must be str or None")
         if not isinstance(self.temporal_cognify, bool):
             raise TypeError("temporal_cognify must be bool")
+        if self.temporal_cognify and self.graph_model is not None:
+            raise ValueError("graph_model is not used by Cognee's temporal cognify pipeline")
+        if self.temporal_cognify and self.custom_prompt:
+            raise ValueError("custom_prompt is not used by Cognee's temporal cognify pipeline")
 
 
 @dataclass(frozen=True)
@@ -141,11 +145,15 @@ def processing_config_from_profile(
     :class:`ProcessingConfig` when any such input changes.
     """
     compat_info = _compat.load()
-    graph_model = (
-        profile.graph_model if profile.graph_model is not None else compat_info.default_graph_model
-    )
+    graph_model = None
+    if not profile.temporal_cognify:
+        graph_model = (
+            profile.graph_model
+            if profile.graph_model is not None
+            else compat_info.default_graph_model
+        )
     chunker = profile.chunker if profile.chunker is not None else compat_info.default_chunker
-    if graph_model is None:
+    if not profile.temporal_cognify and graph_model is None:
         raise CompatibilityError(
             "could not resolve Cognee's default graph model; pass graph_model explicitly"
         )
@@ -166,8 +174,10 @@ def processing_config_from_profile(
         )
         runtime_config_fingerprint = fingerprint_json(runtime_inputs)
     return ProcessingConfig(
-        graph_model_id=_qualified_id(graph_model),
-        graph_model_schema_fingerprint=_model_schema_fingerprint(graph_model),
+        graph_model_id=_qualified_id(graph_model) if graph_model is not None else None,
+        graph_model_schema_fingerprint=(
+            _model_schema_fingerprint(graph_model) if graph_model is not None else None
+        ),
         chunker_id=_qualified_id(chunker),
         chunk_size=chunk_size,
         custom_prompt_fingerprint=(

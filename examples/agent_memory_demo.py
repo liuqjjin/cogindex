@@ -129,15 +129,14 @@ async def entity_names(dataset_id: uuid.UUID) -> set[str]:
     }
 
 
-async def main() -> None:
-    os.environ.setdefault("MOCK_EMBEDDING", "true")
-    os.environ.setdefault("TELEMETRY_DISABLED", "1")
+async def run_demo(storage: Path) -> None:
+    os.environ["MOCK_EMBEDDING"] = "true"
+    os.environ["TELEMETRY_DISABLED"] = "1"
 
     import cocoindex as coco
 
     import cogindex
 
-    storage = Path(tempfile.mkdtemp(prefix="cogindex-agent-memory-"))
     runtime = cogindex.LocalCogneeRuntime(
         data_root=storage / "data", system_root=storage / "system"
     )
@@ -185,6 +184,11 @@ async def main() -> None:
         assert "BlueQueue" not in names
 
     print("3. Passed: the agent read the new fact; the old graph memory is gone.")
+
+
+async def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="cogindex-agent-memory-") as directory:
+        await run_demo(Path(directory))
 
 
 if __name__ == "__main__":

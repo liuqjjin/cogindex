@@ -50,7 +50,7 @@ class InProcessLockProvider:
             isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0
         ):
             raise ValueError("timeout must be a finite positive number or None")
-        self._locks: dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, _LockEntry] = {}
         self._timeout = timeout
 
     def lock(self, scope: str) -> AbstractAsyncContextManager[None]:
@@ -59,18 +59,34 @@ class InProcessLockProvider:
 
     @asynccontextmanager
     async def _lock(self, scope: str) -> AsyncIterator[None]:
-        lock = self._locks.setdefault(scope, asyncio.Lock())
-        if self._timeout is None:
-            await lock.acquire()
-        else:
-            try:
-                async with asyncio.timeout(self._timeout):
-                    await lock.acquire()
-            except TimeoutError as exc:
-                raise LockTimeoutError(
-                    f"timed out after {self._timeout}s acquiring lock {scope!r}"
-                ) from exc
+        entry = self._locks.setdefault(scope, _LockEntry())
+        entry.users += 1
         try:
-            yield
+            if self._timeout is None:
+                await entry.lock.acquire()
+            else:
+                try:
+                    async with asyncio.timeout(self._timeout):
+                        await entry.lock.acquire()
+                except TimeoutError as exc:
+                    raise LockTimeoutError(
+                        f"timed out after {self._timeout}s acquiring lock {scope!r}"
+                    ) from exc
+            try:
+                yield
+            finally:
+                entry.lock.release()
         finally:
-            lock.release()
+            entry.users -= 1
+            if entry.users == 0 and self._locks.get(scope) is entry:
+                del self._locks[scope]
+
+
+class _LockEntry:
+    """One lock plus the holders and waiters that still reference it."""
+
+    __slots__ = ("lock", "users")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.users = 0

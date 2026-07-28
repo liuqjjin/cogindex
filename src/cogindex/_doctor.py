@@ -57,6 +57,7 @@ def doctor(*, check_credentials: bool = True) -> DoctorReport:
     findings.append(_check_cocoindex())
     findings.append(_check_cognee_compat())
     findings.extend(_check_storage_roots())
+    findings.append(_check_embedding_dimensions())
     if check_credentials:
         findings.extend(_check_credentials())
     return DoctorReport(findings=tuple(findings))
@@ -100,10 +101,13 @@ def _check_storage_roots() -> list[DoctorFinding]:
     if data_root is None or system_root is None:
         return [
             DoctorFinding(
-                severity="warning",
+                severity="critical",
                 check="storage-roots",
                 detail="could not read cognee's storage configuration",
-                fix_hint="cognee's config layout may have moved; check versions",
+                fix_hint=(
+                    "check the installed Cognee version and configure explicit "
+                    "data_root/system_root paths"
+                ),
             )
         ]
     findings: list[DoctorFinding] = []
@@ -125,6 +129,23 @@ def _check_storage_roots() -> list[DoctorFinding]:
                 DoctorFinding(severity="ok", check="storage-roots", detail=f"{label}: {path}")
             )
     return findings
+
+
+def _check_embedding_dimensions() -> DoctorFinding:
+    try:
+        dimensions = _compat.validate_embedding_dimensions()
+    except CompatibilityError as exc:
+        return DoctorFinding(
+            severity="critical",
+            check="embedding-dimensions",
+            detail=str(exc),
+            fix_hint="set EMBEDDING_DIMENSIONS to the model's actual vector width",
+        )
+    return DoctorFinding(
+        severity="ok",
+        check="embedding-dimensions",
+        detail=f"configured width {dimensions}",
+    )
 
 
 def _check_credentials() -> list[DoctorFinding]:

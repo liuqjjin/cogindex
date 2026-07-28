@@ -104,7 +104,7 @@ def test_non_existence_with_system_managed_prev_deletes() -> None:
     assert coco.is_non_existence(output.tracking_record)
 
 
-def test_non_existence_with_user_managed_prev_is_hands_off() -> None:
+async def test_non_existence_with_user_managed_prev_is_hands_off() -> None:
     handler = DatasetHandler()
     prev_variants: list[list[statediff.MutualTrackingRecord[DatasetConfigRecord]]] = [
         [_prev_dataset_record("fp-old", ManagedBy.USER)],
@@ -117,6 +117,16 @@ def test_non_existence_with_user_managed_prev_is_hands_off() -> None:
         output = handler.reconcile(_KEY, coco.NON_EXISTENCE, prev, False)
         assert output is not None
         assert output.action.main_action is None
+
+        class RemovedProvider:
+            def get(self, key: str) -> CogneeRuntime:
+                raise AssertionError(f"runtime binding {key!r} must not be read")
+
+        outputs = await _apply_dataset_actions(
+            cast(coco.ContextProvider, RemovedProvider()),
+            [output.action],
+        )
+        assert outputs == [None]
 
 
 def test_non_existence_with_empty_prev_is_noop() -> None:

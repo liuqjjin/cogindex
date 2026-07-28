@@ -1,8 +1,10 @@
-"""Incremental document synchronization for Cognee knowledge bases.
+"""Consistency and recovery for incrementally synchronized knowledge stores.
 
-The package uses CocoIndex change tracking to provide stable document ids,
-incremental replacement, deletion, configuration invalidation, and retry-safe
-target handlers. Design decisions are recorded in ``docs/adr/``.
+The package provides stable document identity, incremental replacement,
+deletion, configuration invalidation, and retry-safe target handlers. The
+current runtime uses CocoIndex for desired-state tracking and Cognee for
+materialized documents, graph data, and vectors. Design decisions are recorded
+in ``docs/adr/``.
 """
 
 from __future__ import annotations

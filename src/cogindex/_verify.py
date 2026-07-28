@@ -124,13 +124,18 @@ async def verify_dataset(
         expected_by_id[data_id] = item
 
     stored_by_id: dict[uuid.UUID, StoredDocument] = {}
-    for stored_document in await runtime.list_documents(handle):
-        if stored_document.data_id in stored_by_id:
-            raise RuntimeError(
-                f"runtime returned duplicate stored data_id {stored_document.data_id} "
-                f"for dataset {name!r}"
-            )
-        stored_by_id[stored_document.data_id] = stored_document
+    async with runtime.dataset_lock(handle):
+        # The dataset may have been deleted and recreated while verification
+        # waited for a writer. Resolve again under the lock rather than reading
+        # through a stale dataset id.
+        current_handle = await runtime.resolve_dataset(name, tenant)
+        for stored_document in await runtime.list_documents(current_handle):
+            if stored_document.data_id in stored_by_id:
+                raise RuntimeError(
+                    f"runtime returned duplicate stored data_id {stored_document.data_id} "
+                    f"for dataset {name!r}"
+                )
+            stored_by_id[stored_document.data_id] = stored_document
 
     issues: list[VerificationIssue] = []
     for data_id in sorted(expected_by_id.keys() | stored_by_id.keys(), key=str):

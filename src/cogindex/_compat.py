@@ -2,7 +2,7 @@
 
 Everything cogindex needs from cognee that is not a stable top-level export
 is imported here, guarded, with actionable errors. No other module imports
-cognee internals directly (AGENTS.md hard rule #5). All imports happen
+cognee internals directly (AGENTS.md invariant 7). All imports happen
 lazily on first use: importing cognee initializes its logging/telemetry, and
 ``import cogindex`` must not pay that cost.
 """
@@ -334,6 +334,52 @@ class CogneeCompat:
     remote_mode_check: Callable[[], bool]
 
 
+def _check_callable_surface(
+    owner: Any,
+    attribute: str,
+    path: str,
+    problems: list[str],
+    *,
+    positional_parameters: tuple[str, ...] = (),
+    keyword_parameters: tuple[str, ...] = (),
+) -> None:
+    """Record incompatibilities for one callable Cognee API surface."""
+    missing = object()
+    candidate = getattr(owner, attribute, missing)
+    if candidate is missing:
+        problems.append(f"{path} is missing")
+        return
+    if not callable(candidate):
+        problems.append(f"{path} is not callable")
+        return
+
+    try:
+        parameters = inspect.signature(candidate).parameters
+    except (TypeError, ValueError):
+        problems.append(f"{path}() has no inspectable signature")
+        return
+
+    for name in positional_parameters:
+        parameter = parameters.get(name)
+        if parameter is None:
+            problems.append(f"{path}() lacks the {name!r} parameter")
+        elif parameter.kind not in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            problems.append(f"{path}() parameter {name!r} cannot be passed positionally")
+
+    for name in keyword_parameters:
+        parameter = parameters.get(name)
+        if parameter is None:
+            problems.append(f"{path}() lacks the {name!r} parameter")
+        elif parameter.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            problems.append(f"{path}() parameter {name!r} cannot be passed by keyword")
+
+
 @functools.cache
 def load() -> CogneeCompat:
     """Import cognee and verify every capability cogindex depends on.
@@ -355,9 +401,83 @@ def load() -> CogneeCompat:
 
     problems: list[str] = []
 
-    for name in ("add", "cognify", "forget", "datasets"):
-        if not hasattr(cognee, name):
-            problems.append(f"cognee.{name} is missing")
+    _check_callable_surface(
+        cognee,
+        "add",
+        "cognee.add",
+        problems,
+        positional_parameters=("data",),
+        keyword_parameters=(
+            "dataset_name",
+            "user",
+            "node_set",
+            "dataset_id",
+            "incremental_loading",
+            "importance_weight",
+            "data_cache",
+        ),
+    )
+    _check_callable_surface(
+        cognee,
+        "cognify",
+        "cognee.cognify",
+        problems,
+        keyword_parameters=(
+            "datasets",
+            "user",
+            "graph_model",
+            "chunker",
+            "chunk_size",
+            "custom_prompt",
+            "temporal_cognify",
+        ),
+    )
+    _check_callable_surface(
+        cognee,
+        "forget",
+        "cognee.forget",
+        problems,
+        keyword_parameters=("data_id", "dataset_id", "memory_only", "user"),
+    )
+
+    datasets_api = getattr(cognee, "datasets", None)
+    if datasets_api is None:
+        problems.append("cognee.datasets is missing")
+    else:
+        _check_callable_surface(
+            datasets_api,
+            "list_datasets",
+            "cognee.datasets.list_datasets",
+            problems,
+            keyword_parameters=("user",),
+        )
+        _check_callable_surface(
+            datasets_api,
+            "list_data",
+            "cognee.datasets.list_data",
+            problems,
+            positional_parameters=("dataset_id",),
+            keyword_parameters=("user",),
+        )
+
+    config_api = getattr(cognee, "config", None)
+    if config_api is None:
+        problems.append("cognee.config is missing")
+    else:
+        _check_callable_surface(
+            config_api,
+            "data_root_directory",
+            "cognee.config.data_root_directory",
+            problems,
+            positional_parameters=("data_root_directory",),
+        )
+        _check_callable_surface(
+            config_api,
+            "system_root_directory",
+            "cognee.config.system_root_directory",
+            problems,
+            positional_parameters=("system_root_directory",),
+        )
 
     data_item_cls: type[Any] | None = None
     try:
@@ -387,16 +507,6 @@ def load() -> CogneeCompat:
             remote_mode_check = candidate
         else:
             problems.append("cognee.api.v1.serve.state.is_remote_mode is not callable")
-
-    if hasattr(cognee, "forget"):
-        forget_params: Mapping[str, inspect.Parameter]
-        try:
-            forget_params = inspect.signature(cognee.forget).parameters
-        except (TypeError, ValueError):
-            forget_params = {}
-        for param in ("data_id", "dataset_id", "memory_only"):
-            if param not in forget_params:
-                problems.append(f"cognee.forget() lacks the {param!r} parameter")
 
     try:
         user_methods = importlib.import_module("cognee.modules.users.methods")
@@ -887,7 +997,12 @@ def _canonical_generation_value(value: Any) -> Any:
 
 
 def _model_arg_kind(key: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+    # Provider-specific arguments are commonly camelCase. Split those
+    # boundaries before lowercasing so accessToken/clientSecret receive the
+    # same credential policy as access_token/client_secret.
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    separated = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", "_", separated)
+    normalized = re.sub(r"[^a-z0-9]+", "_", separated.lower()).strip("_")
     if normalized in _GENERATION_MODEL_ARG_FIELDS:
         return "generation"
     if normalized in _NESTED_MODEL_ARG_FIELDS:
@@ -1069,15 +1184,42 @@ def storage_roots() -> tuple[str | None, str | None]:
 def credentials_present() -> tuple[bool | None, bool | None]:
     """Whether (llm, embedding) credentials look usable. None = unknown.
 
-    "Usable" means an API key is set, or the provider is a local one that
-    needs none (ollama / custom endpoints)."""
-    keyless_providers = {"ollama", "custom"}
+    This is a diagnostic, not an authentication attempt. It reports ``True``
+    only for an inline key, a known keyless provider, or configured Azure
+    managed identity; unfamiliar ambient-credential providers remain
+    ``None`` rather than producing a false critical result.
+    """
+    key_required_llm_providers = {
+        "anthropic",
+        "custom",
+        "gemini",
+        "mistral",
+        "ollama",
+        "openai",
+    }
+    keyless_embedding_providers = {"fastembed", "ollama"}
     llm_ok: bool | None
     embedding_ok: bool | None
+    llm_key_present = False
+    llm_provider = ""
     try:
         llm_config_module = importlib.import_module("cognee.infrastructure.llm.config")
         llm = llm_config_module.get_llm_config()
-        llm_ok = bool(llm.llm_api_key) or llm.llm_provider in keyless_providers
+        # Provider selection in Cognee 1.4 is case-sensitive.
+        llm_provider = _required_str(llm, "llm_provider")
+        llm_key = getattr(llm, "llm_api_key", None)
+        llm_key_present = isinstance(llm_key, str) and bool(llm_key.strip())
+        if llm_provider in key_required_llm_providers:
+            llm_ok = llm_key_present
+        elif llm_provider == "azure":
+            llm_ok = llm_key_present or bool(getattr(llm, "llm_azure_use_managed_identity", False))
+        elif llm_provider == "llama_cpp":
+            llm_ok = True
+        else:
+            # Bedrock uses ambient AWS credentials. Invalid or future provider
+            # names also land here; neither can be proven by inspecting this
+            # config object.
+            llm_ok = None
     except Exception:
         llm_ok = None
     try:
@@ -1085,12 +1227,22 @@ def credentials_present() -> tuple[bool | None, bool | None]:
             "cognee.infrastructure.databases.vector.embeddings.config"
         )
         embedding = embedding_config_module.get_embedding_config()
-        embedding_ok = (
-            bool(embedding.embedding_api_key)
-            or embedding.embedding_provider in keyless_providers
-            # Many providers fall back to the LLM key for embeddings.
-            or (llm_ok is True and embedding.embedding_provider == "openai")
-        )
+        embedding_provider = _required_str(embedding, "embedding_provider")
+        embedding_key = getattr(embedding, "embedding_api_key", None)
+        embedding_key_present = isinstance(embedding_key, str) and bool(embedding_key.strip())
+        if embedding_key_present or embedding_provider in keyless_embedding_providers:
+            embedding_ok = True
+        elif llm_key_present and (
+            embedding_provider == "openai_compatible" or llm_provider != "custom"
+        ):
+            # This mirrors Cognee 1.4's embedding-engine resolver: most
+            # providers fall back to the actual LLM key, not to the broader
+            # question of whether the LLM provider itself is keyless.
+            embedding_ok = True
+        elif embedding_provider in {"openai", "openai_compatible"}:
+            embedding_ok = False
+        else:
+            embedding_ok = None
     except Exception:
         embedding_ok = None
     return llm_ok, embedding_ok
