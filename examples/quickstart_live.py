@@ -110,6 +110,7 @@ async def main() -> None:
     if args.deterministic:
         os.environ["MOCK_EMBEDDING"] = "true"
         os.environ["TELEMETRY_DISABLED"] = "1"
+        os.environ.setdefault("LOG_LEVEL", "ERROR")
 
     import cocoindex as coco
     from cocoindex.connectors import localfs

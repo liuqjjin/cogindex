@@ -132,6 +132,7 @@ async def entity_names(dataset_id: uuid.UUID) -> set[str]:
 async def run_demo(storage: Path) -> None:
     os.environ["MOCK_EMBEDDING"] = "true"
     os.environ["TELEMETRY_DISABLED"] = "1"
+    os.environ.setdefault("LOG_LEVEL", "ERROR")
 
     import cocoindex as coco
 

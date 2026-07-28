@@ -99,6 +99,7 @@ async def run_demo(storage: Path, *, real: bool) -> None:
     if not real:
         os.environ["MOCK_EMBEDDING"] = "true"
         os.environ["TELEMETRY_DISABLED"] = "1"
+        os.environ.setdefault("LOG_LEVEL", "ERROR")
 
     import cocoindex as coco
 

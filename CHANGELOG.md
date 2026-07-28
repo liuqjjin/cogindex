@@ -86,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reorganized the primary README around knowledge-state consistency, moved
   installation and the minimal integration ahead of implementation details,
   and removed claims not supported by tests or benchmark evidence.
+- Added a five-minute review path using the existing real-local replacement
+  example and fault matrix, with their model and end-to-end boundaries stated
+  explicitly.
+- Keep deterministic example output focused on the state transition by
+  defaulting Cognee's log level to errors while respecting an explicit user
+  override.
 
 ### Fixed
 

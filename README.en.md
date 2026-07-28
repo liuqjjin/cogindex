@@ -6,22 +6,20 @@
 
 [中文说明](README.md)
 
-cogindex keeps a changing source of knowledge consistent with its materialized
-knowledge-store state. It assigns stable identities to source documents,
+cogindex keeps changing document sources consistent with their stored
+knowledge-base state. It assigns stable identities to source documents,
 updates only the affected state when content or processing configuration
 changes, and replays operations that were not confirmed after an interrupted
 sync.
 
-The current implementation uses CocoIndex for desired-state tracking and
-Cognee for raw documents, graph data, and vectors. cogindex owns writes,
-replacement, deletion, retry, and dataset locking. Retrieval, ranking, and
-answer generation are outside its scope.
+cogindex owns write-side identity, replacement, deletion, retry, and dataset
+locking. Retrieval, ranking, and answer generation are outside its scope.
 
 ## Why
 
-A knowledge store is not a one-time import. Documents are edited and removed,
-processing configuration changes, and a process may exit before raw data,
-graph data, vectors, and tracking records agree. Three details matter:
+A long-running knowledge store is not a one-time import. Documents are edited
+and removed, processing configuration changes, and a process may exit before
+raw data, graph data, vectors, and tracking records agree. Three risks matter:
 
 - a content-derived identity turns an edit into a second document;
 - an in-place rewrite can leave graph and vector data derived from old text;
@@ -44,6 +42,28 @@ uv add "cogindex @ git+https://github.com/liuqjjin/cogindex.git"
 
 Supported versions are Python `>=3.11,<3.14`, CocoIndex `>=1.0.18,<2`, and
 Cognee `>=1.4.0,<1.5`.
+
+## Five-minute review path
+
+After installing the development dependencies, run these commands from the
+repository root:
+
+```bash
+uv run python examples/agent_memory_demo.py
+uv run pytest tests/unit/test_fault_matrix.py -q
+```
+
+The first command uses a real local Cognee stack with fixed-output model
+substitutes. It edits one document from `BlueQueue` to `GreenQueue`, syncs
+again, queries the graph directly, and checks that the old entity is gone. The
+second command injects failures around locking, hard deletion, derivative
+cleanup, writing, processing, and tracking-state commit across 17 regression
+cases.
+
+The fault matrix uses an in-memory runtime and a model of CocoIndex tracking
+semantics. It demonstrates convergence after a successful retry within that
+model; it is not an end-to-end operating-system crash test. See the
+[example guide](examples/) for the full example and test tiers.
 
 ## Minimal integration
 

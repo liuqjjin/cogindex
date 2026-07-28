@@ -180,6 +180,7 @@ def test_agent_memory_demo_reads_the_replaced_fact(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, f"demo failed:\n{result.stdout}\n{result.stderr}"
     assert not list(tmp_path.glob("cogindex-agent-memory-*"))
+    assert "Pipeline run started" not in result.stdout + result.stderr
 
     answer_lines = [line.strip() for line in result.stdout.splitlines() if "Agent answer:" in line]
     assert answer_lines == [
