@@ -6,11 +6,11 @@
 
 [中文说明](README.md)
 
-cogindex keeps changing document sources consistent with their stored
-knowledge-base state. It assigns stable identities to source documents,
-updates only the affected state when content or processing configuration
-changes, and replays operations that were not confirmed after an interrupted
-sync.
+cogindex is a knowledge-state consistency and incremental synchronization
+system for AI agents. It keeps changing document sources consistent with their
+stored knowledge-base state, assigns stable identities to source documents,
+updates only affected state, and replays operations that were not confirmed
+after an interrupted sync.
 
 cogindex owns write-side identity, replacement, deletion, retry, and dataset
 locking. Retrieval, ranking, and answer generation are outside its scope.
@@ -41,7 +41,10 @@ uv add "cogindex @ git+https://github.com/liuqjjin/cogindex.git"
 ```
 
 Supported versions are Python `>=3.11,<3.14`, CocoIndex `>=1.0.18,<2`, and
-Cognee `>=1.4.0,<1.5`.
+Cognee `>=1.4.0,<1.4.1`. Cognee 1.4.1 constrains `cryptography` below 50, and
+the currently resolvable release in that range is affected by
+`PYSEC-2026-3552`; the supported dependency therefore remains on 1.4.0 until
+upstream permits a fixed release.
 
 ## Five-minute review path
 
@@ -185,10 +188,15 @@ not represent real-model quality.
 
 ## Evaluation
 
-`make ci` runs Ruff, strict mypy, the upstream-review coverage gate, unit
-tests, and the Hypothesis state machine. The core matrix covers Linux, macOS,
-and Python 3.11–3.13. Local Cognee integration, PostgreSQL locking, clean-wheel
-installation, and dependency auditing run separately. Current total coverage
+`make ci` runs Ruff, strict mypy, the upstream-review coverage gate, 388 unit
+tests, and the Hypothesis state machine. The fault-injection matrix contains 17
+regression cases; the state machine generates up to 60 sequences of 40 update,
+delete, and failure steps. Another 14 tests exercise the real local multi-store
+stack, and four exercise PostgreSQL locking.
+
+GitHub Actions runs 11 jobs. Its core matrix covers Linux, macOS, and Python
+3.11–3.13; separate jobs verify coverage, local Cognee behavior, PostgreSQL
+locking, package installation, and dependency security. Current total coverage
 is 90% with branch tracking enabled.
 
 The consistency comparison starts with six documents, changes two, and removes

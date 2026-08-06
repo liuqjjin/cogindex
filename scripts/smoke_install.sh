@@ -57,4 +57,9 @@ assert cogindex.__version__ == expected
 assert version("cogindex") == expected
 print("cogindex", expected, "imported OK from clean venv")
 EOF
+
+  site_packages="$("$venv/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+  uv run pip-audit \
+    --path "$site_packages" \
+    --ignore-vuln PYSEC-2026-2447
 done

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Constrain the supported Cognee range to 1.4.0 because 1.4.1 requires a
+  `cryptography<50` release affected by `PYSEC-2026-3552`. The nightly job
+  still installs the newest upstream releases outside the supported range.
+- Updated the locked `cryptography` release to 50.0.0, refreshed Hypothesis,
+  and moved the pinned setup and publishing actions to their current releases.
+- Audit the dependency set resolved from each clean wheel and source-archive
+  installation, rather than checking only the development lockfile.
 - Include the runtime-resolved Cognee user id and active tenant id in document
   UUID5 identities and dataset lock keys. Identity schema 2 prevents users or
   tenants sharing storage roots from colliding on Cognee's global `Data.id`;

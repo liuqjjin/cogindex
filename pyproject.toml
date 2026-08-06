@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
     "cocoindex>=1.0.18,<2",
-    "cognee>=1.4.0,<1.5",
+    "cognee>=1.4.0,<1.4.1",
     "msgspec>=0.18",
 ]
 

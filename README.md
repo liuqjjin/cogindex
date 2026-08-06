@@ -6,9 +6,9 @@
 
 [英文版](README.en.md)
 
-cogindex 维护持续变化的文档源与知识库存储状态之间的一致性。它为每份源文档生成稳定
-身份，根据正文和处理配置的变化只更新必要部分，并在一次同步没有完成时重新执行尚未
-确认的操作。
+cogindex 是一个面向 AI Agent 的知识状态一致性与增量同步系统，用于维护持续变化的
+文档源与知识库存储状态之间的一致性。它为每份源文档生成稳定身份，根据正文和处理配置
+的变化只更新必要部分，并在一次同步没有完成时重新执行尚未确认的操作。
 
 cogindex 只处理写入侧的身份、替换、删除、重试和数据集锁；检索、排序与回答生成不在
 项目范围内。
@@ -36,7 +36,8 @@ uv add "cogindex @ git+https://github.com/liuqjjin/cogindex.git"
 ```
 
 支持 Python `>=3.11,<3.14`、CocoIndex `>=1.0.18,<2` 和
-Cognee `>=1.4.0,<1.5`。
+Cognee `>=1.4.0,<1.4.1`。Cognee 1.4.1 将 `cryptography` 限制在 50 以下，其中当前可
+解析到的版本命中 `PYSEC-2026-3552`；上游放宽安全版本范围前，正式依赖保持在 1.4.0。
 
 ## 五分钟检查
 
@@ -166,9 +167,13 @@ uv run python examples/shared_entity_demo.py
 
 ## 验证
 
-`make ci` 运行 Ruff、严格 mypy、上游审阅覆盖检查、单元测试和 Hypothesis 状态机。
-核心 CI 覆盖 Linux、macOS 与 Python 3.11–3.13；真实本地 Cognee、PostgreSQL 锁、
-wheel 安装和依赖审计分别运行。当前 coverage.py 开启分支统计后的总覆盖率为 90%。
+`make ci` 运行 Ruff、严格 mypy、上游审阅覆盖检查、388 个单元测试和 Hypothesis
+状态机。故障注入矩阵包含 17 个回归用例；状态机最多生成 60 组、每组 40 步的增删改与
+中断序列。另有 14 个真实本地多存储集成测试和 4 个 PostgreSQL 锁测试。
+
+GitHub Actions 共 11 个任务，核心矩阵覆盖 Linux、macOS 与 Python 3.11–3.13，其余任务
+分别验证覆盖率、本地 Cognee、PostgreSQL 锁、构建产物安装和依赖安全。当前
+coverage.py 开启分支统计后的总覆盖率为 90%。
 
 一致性对比从 6 篇文档开始，修改 2 篇并删除 1 篇：
 
